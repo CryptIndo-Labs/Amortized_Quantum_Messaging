@@ -2,7 +2,7 @@ import time
 from dataclasses import asdict
 import redis
 import errors
-import types
+from AQM_Database import types
 import config
 
 class SecureVault:
@@ -58,7 +58,7 @@ class SecureVault:
 
             with self.dp.pipeline(transaction=True) as pipe:
                 pipe.hset(key_id , "status" , "BURNED")
-                pipe.expire(key_id , config.VAULT_BURN_GRACE_SECONDS)
+                pipe.expire(key_id, config.VAULT_BURN_GRACE_SECONDS)
                 pipe.hincrby("stats:vault", "active_keys", -1)
                 pipe.hincrby("stats:vault", "total_burned", 1)
 

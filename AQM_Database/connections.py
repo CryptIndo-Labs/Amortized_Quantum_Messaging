@@ -1,11 +1,11 @@
 import redis
 import config
 import errors
-from types import HealthStatus
+from AQM_Database.types import HealthStatus
 
 
 def create_vaul_client() -> redis.Redis:
-    r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_VAULT_DB , decode_responses=True , socket_connect_timeout=config.REDIS_SOCKET_TIMEOUT , socket_timeout=config.REDIS_SOCKET_TIMEOUT)
+    r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_VAULT_DB, decode_responses=True, socket_connect_timeout=config.REDIS_SOCKET_TIMEOUT, socket_timeout=config.REDIS_SOCKET_TIMEOUT)
 
     if r.ping():
         print("Connected to Vault.")
