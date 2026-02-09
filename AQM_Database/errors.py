@@ -1,10 +1,9 @@
 class AQMDatabaseError(Exception):
-    pass
+    super.__init__()
 
 class VaultUnavailableError(AQMDatabaseError):
-    def __init__(self , port):
-        self.port = port
-        message = f"Cannot connect to Vault at port {port}"
+    def __init__(self , message):
+        message = f"Vault_error  = {message}"
         super().__init__(message)
 
 class KeyAlreadyExistsError(AQMDatabaseError):
