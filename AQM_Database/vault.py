@@ -1,11 +1,11 @@
 import time
-from dataclasses import asdict
-import redis
-import errors
-from AQM_Database import types
-import config
-from AQM_Database.types import VaultEntry, VaultStats
 from typing import Optional
+
+import redis
+
+from AQM_Database import config, errors
+from AQM_Database.types import VaultEntry, VaultStats
+
 
 class SecureVault:
     def __init__(self, client: redis.Redis):
@@ -19,13 +19,13 @@ class SecureVault:
             raise errors.InvalidCoinCategoryError(coin_category)
 
     def _serialize_entry(
-            self,
-            key_id: str,
-            coin_category: str,
-            encrypted_blob: bytes,
-            encryption_iv: bytes,
-            auth_tag: bytes,
-            coin_version: str,
+        self,
+        key_id: str,
+        coin_category: str,
+        encrypted_blob: bytes,
+        encryption_iv: bytes,
+        auth_tag: bytes,
+        coin_version: str,
     ) -> dict:
         return {
             "key_id": key_id,
@@ -35,7 +35,7 @@ class SecureVault:
             "auth_tag": auth_tag,
             "coin_version": coin_version,
             "status": "ACTIVE",
-            "created_at": str(int(time.time() * 1000)),  # ms epoch as string
+            "created_at": str(int(time.time() * 1000)),
         }
 
     def _deserialize_entry(self, data: dict[bytes, bytes]) -> VaultEntry:
@@ -52,56 +52,59 @@ class SecureVault:
 
     def store_key(
         self,
-        key_id:         str,
-        coin_category:  str,
+        key_id: str,
+        coin_category: str,
         encrypted_blob: bytes,
-        encryption_iv:  bytes,
-        auth_tag:       bytes,
-        coin_version:   str = "kyber768_v1"
-    ) -> bool :
+        encryption_iv: bytes,
+        auth_tag: bytes,
+        coin_version: str = "kyber768_v1",
+    ) -> bool:
         self._validate_coin_category(coin_category)
         full_key = self._vault_key(key_id)
 
-        try :
+        try:
             if self.db.exists(full_key):
-                raise errors.KeyAlreadyBurnedError(key_id)
+                raise errors.KeyAlreadyExistsError(key_id)
 
             mapping = self._serialize_entry(
-                key_id , coin_category , encrypted_blob , encryption_iv , auth_tag , coin_version
+                key_id, coin_category, encrypted_blob, encryption_iv, auth_tag, coin_version
             )
 
             pipe = self.db.pipeline(transaction=True)
-            pipe.hset(full_key , mapping = mapping)
-            pipe.expire(full_key , config.VAULT_KEY_TTL_SECONDS)
-            pipe.hincrby(config.VAULT_STATS_KEY , f"active{coin_category} + 1" , 1)
+            pipe.hset(full_key, mapping=mapping)
+            pipe.expire(full_key, config.VAULT_KEY_TTL_SECONDS)
+            pipe.hincrby(config.VAULT_STATS_KEY, f"active_{coin_category.lower()}", 1)
             pipe.execute()
 
             return True
         except redis.exceptions.ConnectionError:
             raise errors.VaultUnavailableError("store_key")
 
-
-    def burn_key(self , key_id : str) -> bool:
+    def burn_key(self, key_id: str) -> bool:
+        full_key = self._vault_key(key_id)
         try:
-            current_status = self.db.hget(key_id , "status")
-            if current_status is None:
+            data = self.db.hmget(full_key, "status", "coin_category")
+            status, coin_category = data
+
+            if status is None:
                 raise errors.KeyNotFoundError(key_id)
-            if current_status.decode('utf-8') == "BURNED":
+            if status.decode() == "BURNED":
                 raise errors.KeyAlreadyBurnedError(key_id)
 
-            with self.db.pipeline(transaction=True) as pipe:
-                pipe.hset(key_id , "status" , "BURNED")
-                pipe.expire(key_id, config.VAULT_BURN_GRACE_SECONDS)
-                pipe.hincrby("stats:vault", "active_keys", -1)
-                pipe.hincrby("stats:vault", "total_burned", 1)
+            coin_cat = coin_category.decode()
 
-                pipe.execute()
+            pipe = self.db.pipeline(transaction=True)
+            pipe.hset(full_key, "status", "BURNED")
+            pipe.expire(full_key, config.VAULT_BURN_GRACE_SECONDS)
+            pipe.hincrby(config.VAULT_STATS_KEY, f"active_{coin_cat.lower()}", -1)
+            pipe.hincrby(config.VAULT_STATS_KEY, "total_burned", 1)
+            pipe.execute()
 
             return True
         except redis.exceptions.ConnectionError:
             raise errors.VaultUnavailableError("burn_key")
 
-    def fetch_key(self , key_id : str) -> Optional[VaultEntry]:
+    def fetch_key(self, key_id: str) -> Optional[VaultEntry]:
         full_key = self._vault_key(key_id)
         try:
             data = self.db.hgetall(full_key)
@@ -121,14 +124,32 @@ class SecureVault:
         except redis.exceptions.ConnectionError:
             raise errors.VaultUnavailableError("exists")
 
-    def count_active(self , coin_category: Optional[str] = None) -> dict[str , int] | int:
+    def count_active(self, coin_category: Optional[str] = None) -> dict[str, int] | int:
         if coin_category is not None:
             self._validate_coin_category(coin_category)
 
         try:
-            active_ids : list[str] = []
+            if coin_category is not None:
+                val = self.db.hget(config.VAULT_STATS_KEY, f"active_{coin_category.lower()}")
+                return int(val) if val else 0
+
+            stats = self.db.hgetall(config.VAULT_STATS_KEY)
+            return {
+                "GOLD": int(stats.get(b"active_gold", 0)),
+                "SILVER": int(stats.get(b"active_silver", 0)),
+                "BRONZE": int(stats.get(b"active_bronze", 0)),
+            }
+        except redis.exceptions.ConnectionError:
+            raise errors.VaultUnavailableError("count_active")
+
+    def get_all_active_ids(self, coin_category: Optional[str] = None) -> list[str]:
+        if coin_category is not None:
+            self._validate_coin_category(coin_category)
+
+        try:
+            active_ids: list[str] = []
             cursor = 0
-            pattern = f"{config.VAULT_KEY_PREFIX}"
+            pattern = f"{config.VAULT_KEY_PREFIX}:*"
             while True:
                 cursor, keys = self.db.scan(cursor=cursor, match=pattern, count=100)
                 if keys:
@@ -137,28 +158,26 @@ class SecureVault:
                         pipe.hmget(key, "status", "coin_category")
                     results = pipe.execute()
 
-                for keys , (status , category) in zip(keys , results):
-                    if status is None:
-                        continue
-                    if status.decode() != "ACTIVE":
-                        continue
-                    if coin_category and category.decode() != coin_category:
-                        continue
+                    for key, (status, category) in zip(keys, results):
+                        if status is None:
+                            continue
+                        if status.decode() != "ACTIVE":
+                            continue
+                        if coin_category and category.decode() != coin_category:
+                            continue
 
-                    raw_key = key.decode()
-                    key_id = raw_key[len(config.VAULT_KEY_PREFIX) + 1:]
-                    active_ids.append(key_id)
+                        raw_key = key.decode()
+                        key_id = raw_key[len(config.VAULT_KEY_PREFIX) + 1:]
+                        active_ids.append(key_id)
 
                 if cursor == 0:
                     break
             return active_ids
-
         except redis.exceptions.ConnectionError:
             raise errors.VaultUnavailableError("get_all_active_ids")
 
-
-    def purge_expired(self , max_days_age : int = 30) -> int:
-        cutoff_ms = int((time.time() - max_days_age * 86400) * 1000)
+    def purge_expired(self, max_age_days: int = 30) -> int:
+        cutoff_ms = int((time.time() - max_age_days * 86400) * 1000)
         purged = 0
         cursor = 0
         pattern = f"{config.VAULT_KEY_PREFIX}:*"
@@ -173,6 +192,7 @@ class SecureVault:
                         continue
                     if int(created_at) > cutoff_ms:
                         continue
+
                     coin_cat = category.decode()
                     pipe = self.db.pipeline(transaction=True)
                     pipe.delete(key)
@@ -183,15 +203,13 @@ class SecureVault:
 
                 if cursor == 0:
                     break
-                return purged
-
+            return purged
         except redis.exceptions.ConnectionError:
             raise errors.VaultUnavailableError("purge_expired")
 
     def get_stats(self) -> VaultStats:
         try:
             stats = self.db.hgetall(config.VAULT_STATS_KEY)
-
             return VaultStats(
                 active_gold=int(stats.get(b"active_gold", 0)),
                 active_silver=int(stats.get(b"active_silver", 0)),
@@ -199,6 +217,5 @@ class SecureVault:
                 total_burned=int(stats.get(b"total_burned", 0)),
                 total_expired=int(stats.get(b"total_expired", 0)),
             )
-
         except redis.exceptions.ConnectionError:
             raise errors.VaultUnavailableError("get_stats")

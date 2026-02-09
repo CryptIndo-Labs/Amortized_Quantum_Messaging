@@ -1,5 +1,5 @@
 class AQMDatabaseError(Exception):
-    super.__init__()
+    pass
 
 class VaultUnavailableError(AQMDatabaseError):
     def __init__(self , message):
@@ -47,4 +47,20 @@ class ContactNotRegisteredError(AQMDatabaseError):
     def __init__(self , contact_id):
         self.contact = contact_id
         message = f"Contact {contact_id} not registered"
+        super().__init__(message)
+
+
+class BudgetExceededError(AQMDatabaseError):
+    def __init__(self, contact_id, coin_category, current_count, cap):
+        self.contact_id = contact_id
+        self.coin_category = coin_category
+        self.current_count = current_count
+        self.cap = cap
+        message = f"Budget exceeded for {contact_id}/{coin_category}: {current_count}/{cap}"
+        super().__init__(message)
+
+
+class ConcurrencyError(AQMDatabaseError):
+    def __init__(self, operation):
+        message = f"Optimistic lock failed after max retries: {operation}"
         super().__init__(message)
