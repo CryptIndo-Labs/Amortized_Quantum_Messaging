@@ -2,9 +2,9 @@ import time
 
 import redis
 
-from AQM_Database import config, errors
-from AQM_Database.inventory import SmartInventory
-from AQM_Database.types import GCResult
+from AQM_Database.aqm_shared import errors, config
+from AQM_Database.aqm_db.inventory import SmartInventory
+from AQM_Database.aqm_shared.types import GCResult
 
 
 class GarbageCollector:
@@ -86,9 +86,9 @@ class GarbageCollector:
 
             summary = self.inventory.get_inventory(contact_id)
             bytes_freed = (
-                summary.gold_count * config.COIN_SIZE_BYTES["GOLD"]
-                + summary.silver_count * config.COIN_SIZE_BYTES["SILVER"]
-                + summary.bronze_count * config.COIN_SIZE_BYTES["BRONZE"]
+                    summary.gold_count * config.COIN_SIZE_BYTES["GOLD"]
+                    + summary.silver_count * config.COIN_SIZE_BYTES["SILVER"]
+                    + summary.bronze_count * config.COIN_SIZE_BYTES["BRONZE"]
             )
 
             keys_deleted = self._delete_all_keys_for_contact(contact_id)
@@ -126,9 +126,9 @@ class GarbageCollector:
                     total_keys = summary.gold_count + summary.silver_count + summary.bronze_count
                     keys_deleted += total_keys
                     bytes_freed += (
-                        summary.gold_count * config.COIN_SIZE_BYTES["GOLD"]
-                        + summary.silver_count * config.COIN_SIZE_BYTES["SILVER"]
-                        + summary.bronze_count * config.COIN_SIZE_BYTES["BRONZE"]
+                            summary.gold_count * config.COIN_SIZE_BYTES["GOLD"]
+                            + summary.silver_count * config.COIN_SIZE_BYTES["SILVER"]
+                            + summary.bronze_count * config.COIN_SIZE_BYTES["BRONZE"]
                     )
                     contacts_cleaned += 1
 

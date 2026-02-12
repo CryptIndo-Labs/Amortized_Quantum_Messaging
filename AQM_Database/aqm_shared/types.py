@@ -63,3 +63,23 @@ class HealthStatus:
     vault_key_count:     int
     inventory_key_count: int
     uptime_seconds:      float
+
+@dataclass
+class CoinUpload:
+    key_id:          str
+    coin_category:   str
+    public_key_blob: bytes
+    signature_blob:  bytes
+
+@dataclass
+class CoinRecord:
+    key_id:          str
+    coin_category:   str
+    public_key_blob: bytes
+    signature_blob:  bytes
+
+@dataclass
+class InventoryCount:
+    gold:   int
+    silver: int
+    bronze: int

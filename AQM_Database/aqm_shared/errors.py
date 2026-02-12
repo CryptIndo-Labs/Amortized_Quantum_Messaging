@@ -64,3 +64,18 @@ class ConcurrencyError(AQMDatabaseError):
     def __init__(self, operation):
         message = f"Optimistic lock failed after max retries: {operation}"
         super().__init__(message)
+
+class ServerDatabaseError(Exception):
+    pass
+
+class UploadError(ServerDatabaseError):
+    def __init__(self , message):
+        super().__init__(message)
+
+class ConnectionPoolError(ServerDatabaseError):
+    def __init__(self , message):
+        super().__init__(message)
+
+class FetchError(ServerDatabaseError):
+    def __init__(self , message):
+        super().__init__(message)

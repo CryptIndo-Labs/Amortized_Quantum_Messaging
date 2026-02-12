@@ -3,8 +3,8 @@ from typing import Optional
 
 import redis
 
-from AQM_Database import config, errors
-from AQM_Database.types import VaultEntry, VaultStats
+from AQM_Database.aqm_shared import errors, config
+from AQM_Database.aqm_shared.types import VaultEntry, VaultStats
 
 
 class SecureVault:
