@@ -5,7 +5,11 @@ AQM Demo Runner — Preflight checks + prototype execution.
 Usage:
     python demo.py              Run the full 4-phase lifecycle demo
     python demo.py --check      Only run preflight checks, don't start demo
-    python demo.py --tests      Run the full test suite (138 tests)
+    python demo.py --tests      Run the full test suite (171 tests)
+    python demo.py --all        Run tests first, then demo
+    python demo.py --chat       Run two-user chat demo (all priority scenarios)
+    python demo.py --demo-pair  Launch two terminals for interactive chat
+    python demo.py --chat-bench Run AQM vs TLS 1.3 benchmark
 
 Requires:
     - conda activate aqm-db
@@ -125,6 +129,7 @@ def run_tests():
         ("Shared (crypto + context)", "AQM_Database/aqm_shared/tests/", False),
         ("Redis (vault + inventory + gc)", "AQM_Database/aqm_db/tests/", False),
         ("Server (PostgreSQL + bridge)", "AQM_Database/aqm_server/tests/", True),
+        ("Chat (protocol + session + benchmark)", "AQM_Database/chat/tests/", True),
     ]
 
     total_passed = 0
@@ -173,13 +178,19 @@ def parse_args():
 examples:
   python demo.py              Run full demo (preflight + 4-phase lifecycle)
   python demo.py --check      Only run preflight checks
-  python demo.py --tests      Run the full test suite (138 tests)
+  python demo.py --tests      Run the full test suite
   python demo.py --all        Run tests first, then demo
+  python demo.py --chat       Run two-user chat demo (all priority scenarios)
+  python demo.py --demo-pair  Launch two terminals for interactive chat
+  python demo.py --chat-bench Run AQM vs TLS 1.3 benchmark
         """,
     )
     parser.add_argument("--check", action="store_true", help="Only run preflight checks")
     parser.add_argument("--tests", action="store_true", help="Run the full test suite")
     parser.add_argument("--all", action="store_true", help="Run tests first, then demo")
+    parser.add_argument("--chat", action="store_true", help="Run two-user chat demo (all priorities)")
+    parser.add_argument("--demo-pair", action="store_true", help="Launch two terminals for interactive chat")
+    parser.add_argument("--chat-bench", action="store_true", help="Run AQM vs TLS 1.3 benchmark")
     return parser.parse_args()
 
 
@@ -196,6 +207,32 @@ def main():
     if args.check:
         ok_flag = preflight()
         sys.exit(0 if ok_flag else 1)
+
+    if args.chat:
+        if not preflight():
+            fail("Preflight failed — aborting")
+            sys.exit(1)
+        import asyncio
+        from AQM_Database.chat.session import run_auto_demo
+        asyncio.run(run_auto_demo())
+        sys.exit(0)
+
+    if args.demo_pair:
+        if not preflight():
+            fail("Preflight failed — aborting")
+            sys.exit(1)
+        from AQM_Database.chat.cli import launch_demo_pair
+        launch_demo_pair("BESTIE")
+        sys.exit(0)
+
+    if args.chat_bench:
+        if not preflight():
+            fail("Preflight failed — aborting")
+            sys.exit(1)
+        import asyncio
+        from AQM_Database.chat.benchmark import run_benchmark
+        asyncio.run(run_benchmark())
+        sys.exit(0)
 
     if args.tests:
         preflight()
