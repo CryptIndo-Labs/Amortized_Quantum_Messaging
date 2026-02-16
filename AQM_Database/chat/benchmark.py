@@ -4,7 +4,7 @@ AQM per-tier timing + TLS 1.3 handshake comparison benchmark.
 AQM measurement (per tier, N iterations):
     mint_coin() + vault.store_key() + server.upload_coins() +
     fetch_and_cache() + inventory.select_coin() +
-    simulate_encrypt() + simulate_decrypt() + vault.burn_key()
+    encrypt_message() + decrypt_message() + vault.burn_key()
     → total ms
 
 TLS 1.3 measurement (N iterations):
@@ -32,7 +32,7 @@ from AQM_Database.aqm_db.inventory import SmartInventory
 from AQM_Database.aqm_server import config as srv_config
 from AQM_Database.aqm_server.coin_inventory import CoinInventoryServer
 from AQM_Database.bridge import upload_coins, fetch_and_cache
-from AQM_Database.chat.protocol import simulate_encrypt, simulate_decrypt
+from AQM_Database.chat.protocol import encrypt_message, decrypt_message
 from AQM_Database.prototype import Display
 
 
@@ -178,10 +178,10 @@ async def _measure_aqm_tier(
         entry = inventory.select_coin(contact_id, tier)
 
         # 7. Encrypt
-        ciphertext = simulate_encrypt("benchmark payload", entry.public_key)
+        ciphertext = encrypt_message("benchmark payload", entry.public_key)
 
         # 8. Decrypt
-        plaintext, _ = simulate_decrypt(ciphertext, entry.public_key)
+        plaintext, _ = decrypt_message(ciphertext, entry.public_key)
 
         # 9. Burn private key
         vault.burn_key(bundle.key_id)
@@ -286,8 +286,8 @@ async def _measure_aqm_per_message(
         start = time.perf_counter()
 
         entry = inventory.select_coin(cid, tier)
-        ciphertext = simulate_encrypt("benchmark payload", entry.public_key)
-        _, _ = simulate_decrypt(ciphertext, entry.public_key)
+        ciphertext = encrypt_message("benchmark payload", entry.public_key)
+        _, _ = decrypt_message(ciphertext, entry.public_key)
         vault.burn_key(entry.key_id)
 
         elapsed_ms = (time.perf_counter() - start) * 1000

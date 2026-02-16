@@ -89,10 +89,12 @@ def test_store_key_mate_cannot_store_gold(inventory, registered_mate):
         inventory.store_key(registered_mate, "gold_001", "GOLD", _make_pub_key("GOLD"), _make_sig("GOLD"))
 
 
-def test_store_key_stranger_cannot_store_anything(inventory):
+def test_store_key_stranger_can_store_bronze(inventory):
+    """STRANGER budget: 0G / 0S / 5B — BRONZE allowed, GOLD rejected."""
     inventory.register_contact("stranger_001", "STRANGER", "Stranger")
+    assert inventory.store_key("stranger_001", "key_001", "BRONZE", _make_pub_key("BRONZE"), _make_sig("BRONZE"))
     with pytest.raises(errors.BudgetExceededError):
-        inventory.store_key("stranger_001", "key_001", "BRONZE", _make_pub_key("BRONZE"), _make_sig("BRONZE"))
+        inventory.store_key("stranger_001", "key_002", "GOLD", _make_pub_key("GOLD"), _make_sig("GOLD"))
 
 
 def test_store_key_unregistered_contact_raises(inventory):

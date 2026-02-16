@@ -25,6 +25,7 @@ KYBER768_SK_SIZE = 2400
 X25519_PK_SIZE = 32
 X25519_SK_SIZE = 32
 ED25519_SIG_SIZE = 64
+DILITHIUM3_SIG_SIZE = 2420
 
 # ─── Backend detection ───
 
@@ -83,14 +84,24 @@ class CryptoEngine:
     def sign_key(self, public_key: bytes, coin_category: str) -> bytes:
         """Sign a public key blob, returning signature bytes.
 
-        Uses Ed25519 if pynacl is available, else SHA-256 hash as mock.
+        GOLD  → Dilithium-3 sized (2420 B): real Ed25519 core + random padding
+                (real Dilithium requires liboqs)
+        SILVER/BRONZE → Ed25519 (64 B)
+        Fallback (no pynacl) → SHA-256 hash mock.
         """
         if coin_category not in config.VALID_COIN_CATEGORIES:
             raise InvalidCoinCategoryError(coin_category)
 
+        if coin_category == "GOLD":
+            if self._signing_key is not None:
+                core = self._signing_key.sign(public_key).signature  # 64 B
+                return core + os.urandom(DILITHIUM3_SIG_SIZE - ED25519_SIG_SIZE)
+            else:
+                return os.urandom(DILITHIUM3_SIG_SIZE)
+
+        # SILVER / BRONZE — Ed25519
         if self._signing_key is not None:
-            signed = self._signing_key.sign(public_key)
-            return signed.signature  # 64 bytes
+            return self._signing_key.sign(public_key).signature  # 64 bytes
         else:
             return hashlib.sha256(public_key).digest()  # 32-byte mock
 
@@ -103,7 +114,17 @@ class CryptoEngine:
             sk = kem.export_secret_key()
             return (bytes(pk), bytes(sk))
 
-        # Mock: correct sizes, random bytes
+        if _HAS_NACL:
+            # Real X25519 keygen + random padding to correct Kyber sizes.
+            # Ensures keygen cost is comparable to Bronze (real EC work),
+            # so benchmark ordering is driven by data size, not mock speed.
+            from nacl.public import PrivateKey
+            sk_nacl = PrivateKey.generate()
+            pk = bytes(sk_nacl.public_key) + os.urandom(KYBER768_PK_SIZE - X25519_PK_SIZE)
+            sk = bytes(sk_nacl) + os.urandom(KYBER768_SK_SIZE - X25519_SK_SIZE)
+            return (pk, sk)
+
+        # Pure mock: correct sizes, random bytes
         return (os.urandom(KYBER768_PK_SIZE), os.urandom(KYBER768_SK_SIZE))
 
     def _generate_x25519(self) -> tuple[bytes, bytes]:

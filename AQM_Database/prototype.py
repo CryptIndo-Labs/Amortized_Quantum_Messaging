@@ -105,7 +105,7 @@ class Display:
         print(f"""
 {cls.CYAN}{cls.BOLD}
     ╔═══════════════════════════════════════════════════╗
-    ║     AQM — Amortized Quantum Messaging Demo       ║
+    ║     AQM — Amortized Quantum Messaging Demo        ║
     ║     Post-Quantum Key Lifecycle Prototype          ║
     ╚═══════════════════════════════════════════════════╝
 {cls.RESET}""")
@@ -118,8 +118,8 @@ BOB_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ALICE_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 BOB_CONTACT_ID = "bob"
 
-# Mint plan: 5 GOLD, 4 SILVER, 1 BRONZE
-MINT_PLAN = [("GOLD", 5), ("SILVER", 4), ("BRONZE", 1)]
+# Constant mint plan: 5 GOLD, 6 SILVER, 5 BRONZE
+MINT_PLAN = [("GOLD", 5), ("SILVER", 6), ("BRONZE", 5)]
 
 
 async def phase1_mint(engine: CryptoEngine, vault: SecureVault, server: CoinInventoryServer):

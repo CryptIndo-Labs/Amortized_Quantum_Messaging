@@ -8,8 +8,8 @@ import uuid
 from AQM_Database.chat.protocol import (
     ChatMessage,
     channel_for,
-    simulate_encrypt,
-    simulate_decrypt,
+    encrypt_message,
+    decrypt_message,
     build_message,
     serialize,
     deserialize,
@@ -31,13 +31,13 @@ def test_channel_for_uuid():
     assert uid in ch
 
 
-# ─── simulate_encrypt / simulate_decrypt ───
+# ─── encrypt_message / decrypt_message ───
 
 def test_encrypt_decrypt_roundtrip():
     pk = os.urandom(32)
     plaintext = "Hello, quantum world!"
-    ct = simulate_encrypt(plaintext, pk)
-    decrypted, valid = simulate_decrypt(ct, pk)
+    ct = encrypt_message(plaintext, pk)
+    decrypted, valid = decrypt_message(ct, pk)
     assert decrypted == plaintext
     assert valid is True
 
@@ -45,30 +45,31 @@ def test_encrypt_decrypt_roundtrip():
 def test_decrypt_wrong_key_fails_verification():
     pk1 = os.urandom(32)
     pk2 = os.urandom(32)
-    ct = simulate_encrypt("secret", pk1)
-    decrypted, valid = simulate_decrypt(ct, pk2)
-    # Plaintext is still readable (simulation), but tag check fails
-    assert decrypted == "secret"
+    ct = encrypt_message("secret", pk1)
+    decrypted, valid = decrypt_message(ct, pk2)
+    # Real AEAD: wrong key → decryption fails entirely
+    assert decrypted == ""
     assert valid is False
 
 
-def test_encrypt_produces_tag_plus_plaintext():
+def test_encrypt_produces_aead_ciphertext():
     pk = os.urandom(64)
-    ct = simulate_encrypt("test", pk)
-    # 32-byte SHA-256 tag + plaintext bytes
-    assert len(ct) == 32 + len("test".encode("utf-8"))
+    ct = encrypt_message("test", pk)
+    # NaCl SecretBox: 24B nonce + len(pt) + 16B MAC
+    pt_len = len("test".encode("utf-8"))
+    assert len(ct) == 24 + pt_len + 16
 
 
 def test_decrypt_short_ciphertext():
-    plaintext, valid = simulate_decrypt(b"short", os.urandom(32))
+    plaintext, valid = decrypt_message(b"short", os.urandom(32))
     assert plaintext == ""
     assert valid is False
 
 
 def test_encrypt_empty_string():
     pk = os.urandom(32)
-    ct = simulate_encrypt("", pk)
-    decrypted, valid = simulate_decrypt(ct, pk)
+    ct = encrypt_message("", pk)
+    decrypted, valid = decrypt_message(ct, pk)
     assert decrypted == ""
     assert valid is True
 
@@ -76,9 +77,18 @@ def test_encrypt_empty_string():
 def test_encrypt_unicode():
     pk = os.urandom(32)
     text = "quantum"
-    ct = simulate_encrypt(text, pk)
-    decrypted, valid = simulate_decrypt(ct, pk)
+    ct = encrypt_message(text, pk)
+    decrypted, valid = decrypt_message(ct, pk)
     assert decrypted == text
+    assert valid is True
+
+
+def test_encrypt_large_key_roundtrip():
+    """GOLD-sized public key (1184 B) encrypts/decrypts correctly."""
+    pk = os.urandom(1184)
+    ct = encrypt_message("gold-tier message", pk)
+    decrypted, valid = decrypt_message(ct, pk)
+    assert decrypted == "gold-tier message"
     assert valid is True
 
 
@@ -104,7 +114,7 @@ def test_build_message_fields():
     # Verify base64 fields are decodable
     assert base64.b64decode(msg.public_key_b64) == pk
     ct = base64.b64decode(msg.ciphertext_b64)
-    assert len(ct) > 32
+    assert len(ct) > 0
 
 
 # ─── serialize / deserialize ───

@@ -19,61 +19,35 @@ from AQM_Database.aqm_shared import config
 from AQM_Database.aqm_db.vault import SecureVault
 from AQM_Database.aqm_db.inventory import SmartInventory
 from AQM_Database.bridge import upload_coins, fetch_and_cache
-from AQM_Database.chat.session import ChatSession, MINT_PLANS
-from AQM_Database.chat.protocol import simulate_decrypt
+from AQM_Database.chat.session import ChatSession, MINT_PLAN
+from AQM_Database.chat.protocol import decrypt_message
 
 pytestmark = pytest.mark.asyncio
 
 
 # ─── Provision tests ───
 
-async def test_provision_bestie(fake_vault_client, fake_inv_client, server, pg_pool):
-    session = ChatSession(
-        "alice", "bob", "BESTIE",
-        vault_client=fake_vault_client,
-        inv_client=fake_inv_client,
-        pool=pg_pool,
-    )
-    session.vault = SecureVault(fake_vault_client)
-    session.inventory = SmartInventory(fake_inv_client)
-    session.server = server
+async def test_provision_constant_plan(fake_vault_client, fake_inv_client, server, pg_pool):
+    """All priorities mint the same constant set of coins."""
+    for priority in ("BESTIE", "MATE", "STRANGER"):
+        session = ChatSession(
+            "alice", "bob", priority,
+            vault_client=fake_vault_client,
+            inv_client=fake_inv_client,
+            pool=pg_pool,
+        )
+        session.vault = SecureVault(fake_vault_client)
+        session.inventory = SmartInventory(fake_inv_client)
+        session.server = server
 
-    minted = await session.provision()
-    assert minted["GOLD"] == 5
-    assert minted["SILVER"] == 4
-    assert minted["BRONZE"] == 1
+        minted = await session.provision()
+        assert minted["GOLD"] == 5, f"{priority}: GOLD"
+        assert minted["SILVER"] == 6, f"{priority}: SILVER"
+        assert minted["BRONZE"] == 5, f"{priority}: BRONZE"
 
-
-async def test_provision_mate(fake_vault_client, fake_inv_client, server, pg_pool):
-    session = ChatSession(
-        "alice", "bob", "MATE",
-        vault_client=fake_vault_client,
-        inv_client=fake_inv_client,
-        pool=pg_pool,
-    )
-    session.vault = SecureVault(fake_vault_client)
-    session.inventory = SmartInventory(fake_inv_client)
-    session.server = server
-
-    minted = await session.provision()
-    assert minted.get("GOLD", 0) == 0
-    assert minted["SILVER"] == 6
-    assert minted["BRONZE"] == 4
-
-
-async def test_provision_stranger_mints_nothing(fake_vault_client, fake_inv_client, server, pg_pool):
-    session = ChatSession(
-        "alice", "bob", "STRANGER",
-        vault_client=fake_vault_client,
-        inv_client=fake_inv_client,
-        pool=pg_pool,
-    )
-    session.vault = SecureVault(fake_vault_client)
-    session.inventory = SmartInventory(fake_inv_client)
-    session.server = server
-
-    minted = await session.provision()
-    assert sum(minted.values()) == 0
+        # Cleanup for next iteration
+        session.cleanup_user_data()
+        await session.cleanup_server_data()
 
 
 # ─── Register and fetch tests ───
@@ -82,9 +56,9 @@ async def test_register_and_fetch_bestie(fake_vault_client, fake_inv_client, ser
     engine = CryptoEngine()
     partner_id = uuid4()
 
-    # Simulate partner uploading coins
+    # Simulate partner uploading coins (constant plan)
     uploads = []
-    for tier, count in MINT_PLANS["BESTIE"]:
+    for tier, count in MINT_PLAN:
         for _ in range(count):
             bundle = mint_coin(engine, tier)
             uploads.append(CoinUpload(
@@ -113,7 +87,24 @@ async def test_register_and_fetch_bestie(fake_vault_client, fake_inv_client, ser
     assert fetched["BRONZE"] == caps["BRONZE"]
 
 
-async def test_register_and_fetch_stranger_gets_nothing(fake_vault_client, fake_inv_client, server, pg_pool):
+async def test_register_and_fetch_stranger_gets_bronze(fake_vault_client, fake_inv_client, server, pg_pool):
+    """STRANGER budget allows BRONZE — fetch should succeed."""
+    engine = CryptoEngine()
+    partner_id = uuid4()
+
+    # Partner uploads coins (constant plan — includes BRONZE)
+    uploads = []
+    for tier, count in MINT_PLAN:
+        for _ in range(count):
+            bundle = mint_coin(engine, tier)
+            uploads.append(CoinUpload(
+                key_id=bundle.key_id,
+                coin_category=bundle.coin_category,
+                public_key_blob=bundle.public_key,
+                signature_blob=bundle.signature,
+            ))
+    await upload_coins(server, partner_id, uploads)
+
     session = ChatSession(
         "alice", "bob", "STRANGER",
         vault_client=fake_vault_client,
@@ -123,9 +114,13 @@ async def test_register_and_fetch_stranger_gets_nothing(fake_vault_client, fake_
     session.vault = SecureVault(fake_vault_client)
     session.inventory = SmartInventory(fake_inv_client)
     session.server = server
+    session.partner_id = partner_id
 
-    fetched = await session.register_and_fetch(timeout=1.0)
-    assert fetched == {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
+    fetched = await session.register_and_fetch(timeout=2.0)
+    caps = config.BUDGET_CAPS["STRANGER"]
+    assert fetched["GOLD"] == 0
+    assert fetched["SILVER"] == 0
+    assert fetched["BRONZE"] == caps["BRONZE"]
 
 
 # ─── Send message tests ───
@@ -213,7 +208,24 @@ async def test_send_mate_falls_back_from_gold(fake_vault_client, fake_inv_client
     assert msg.coin_tier == "SILVER"
 
 
-async def test_send_stranger_returns_none(fake_vault_client, fake_inv_client, server, pg_pool):
+async def test_send_stranger_falls_back_to_bronze(fake_vault_client, fake_inv_client, server, pg_pool):
+    """STRANGER has only BRONZE — all scenarios fall back to BRONZE."""
+    engine = CryptoEngine()
+    partner_id = uuid4()
+
+    # Upload partner coins (constant plan)
+    uploads = []
+    for tier, count in MINT_PLAN:
+        for _ in range(count):
+            bundle = mint_coin(engine, tier)
+            uploads.append(CoinUpload(
+                key_id=bundle.key_id,
+                coin_category=bundle.coin_category,
+                public_key_blob=bundle.public_key,
+                signature_blob=bundle.signature,
+            ))
+    await upload_coins(server, partner_id, uploads)
+
     session = ChatSession(
         "alice", "bob", "STRANGER",
         vault_client=fake_vault_client,
@@ -223,14 +235,16 @@ async def test_send_stranger_returns_none(fake_vault_client, fake_inv_client, se
     session.vault = SecureVault(fake_vault_client)
     session.inventory = SmartInventory(fake_inv_client)
     session.server = server
+    session.partner_id = partner_id
     from unittest.mock import MagicMock
     session._transport = MagicMock()
 
-    # Register contact — STRANGER gets 0 budget, register_and_fetch returns 0s
-    await session.register_and_fetch(timeout=1.0)
+    await session.register_and_fetch(timeout=2.0)
 
+    # SCENARIO_A wants GOLD → falls back to BRONZE (only tier available)
     msg = session.send_message("Hello?", SCENARIO_A)
-    assert msg is None
+    assert msg is not None
+    assert msg.coin_tier == "BRONZE"
 
 
 # ─── Key exhaustion tests ───
@@ -326,21 +340,28 @@ async def test_burn_after_receive(fake_vault_client, fake_inv_client, server, pg
     assert received[0]["burned"] is True
 
 
-# ─── MINT_PLANS tests ───
+# ─── MINT_PLAN tests ───
 
-def test_mint_plans_bestie_total():
-    total = sum(c for _, c in MINT_PLANS["BESTIE"])
-    assert total == 10
-
-
-def test_mint_plans_mate_no_gold():
-    for tier, count in MINT_PLANS["MATE"]:
-        if tier == "GOLD":
-            assert count == 0
+def test_mint_plan_is_constant():
+    """MINT_PLAN is a single list, not per-priority."""
+    assert isinstance(MINT_PLAN, list)
+    total = sum(c for _, c in MINT_PLAN)
+    assert total == 16  # 5G + 6S + 5B
 
 
-def test_mint_plans_stranger_empty():
-    assert MINT_PLANS["STRANGER"] == []
+def test_mint_plan_has_all_tiers():
+    tiers = {tier for tier, _ in MINT_PLAN}
+    assert tiers == {"GOLD", "SILVER", "BRONZE"}
+
+
+def test_mint_plan_covers_max_budget():
+    """Constant plan has enough of each tier for any priority's budget."""
+    plan_counts = {tier: count for tier, count in MINT_PLAN}
+    for priority, caps in config.BUDGET_CAPS.items():
+        for tier, cap in caps.items():
+            assert plan_counts[tier] >= cap, (
+                f"{priority} needs {cap} {tier} but plan has {plan_counts[tier]}"
+            )
 
 
 # ─── coin_status tests ───

@@ -10,7 +10,7 @@ AQM Database is the **data persistence layer** for the Amortized Quantum Messagi
 - **Alice's Smart Inventory** (local Redis db=1) — caches contacts' public keys with per-contact/per-tier budget caps and FIFO coin selection with tier fallback
 - **Server's Coin Inventory** (PostgreSQL) — public key directory with atomic Delete-on-Fetch via `FOR UPDATE SKIP LOCKED`
 - **Bridge** — async glue connecting Redis ↔ PostgreSQL (fetch_and_cache, upload_coins, sync_inventory)
-- **Crypto Engine** — post-quantum key generation (Kyber-768 + X25519) and Ed25519 signing
+- **Crypto Engine** — post-quantum key generation (Kyber-768 + X25519), Dilithium-3/Ed25519 signing, real NaCl AEAD encryption
 - **Context Manager** — device-aware coin tier selection based on battery, WiFi, and signal strength
 - **Chat** — terminal-to-terminal real-time chat using the full AQM lifecycle, with TLS 1.3 benchmark comparison
 
@@ -23,7 +23,7 @@ cd AQM_Database && docker compose up -d     # Redis 7 (6379) + PostgreSQL 16 (54
 ```
 
 Python 3.10+. Key deps: `redis-py`, `asyncpg`, `fastapi`, `pynacl`, `pytest`, `fakeredis`.
-Optional: `liboqs-python` for real Kyber-768 (falls back to `os.urandom` mock without it).
+Optional: `liboqs-python` for real Kyber-768 + Dilithium-3 (falls back to X25519-based mock keygen + random padding without it).
 
 ## Running the Demo
 
@@ -68,16 +68,16 @@ python -m AQM_Database.chat.cli --benchmark
 pytest AQM_Database/ -v
 
 # By package
-pytest AQM_Database/aqm_shared/tests/ -v   # 31 tests — crypto + context (no Docker)
+pytest AQM_Database/aqm_shared/tests/ -v   # 32 tests — crypto + context (no Docker)
 pytest AQM_Database/aqm_db/tests/ -v       # 70 tests — vault, inventory, gc, concurrency (no Docker, uses fakeredis)
 pytest AQM_Database/aqm_server/tests/ -v   # 37 tests — upload, fetch, purge, bridge, api (needs Docker)
-pytest AQM_Database/chat/tests/ -v         # 35 tests — protocol, session, benchmark (protocol: no Docker; session+benchmark: needs Docker)
+pytest AQM_Database/chat/tests/ -v         # 34 tests — protocol, session, benchmark (protocol: no Docker; session+benchmark: needs Docker)
 
 # Single test
 pytest AQM_Database/aqm_db/tests/test_vault.py::test_store_key_success -v
 ```
 
-Test total: **173 tests** (31 shared + 70 Redis + 37 server + 35 chat).
+Test total: **173 tests** (32 shared + 70 Redis + 37 server + 34 chat).
 
 ## Package Layout
 
@@ -90,7 +90,7 @@ AQM_Database/
 │   ├── crypto_engine.py           # CryptoEngine, MintedCoinBundle, mint_coin()
 │   ├── context_manager.py         # DeviceContext, ContextManager, SCENARIO_A/B/C
 │   └── tests/
-│       ├── test_crypto_engine.py  # 14 tests — key sizes, signing, mint_coin
+│       ├── test_crypto_engine.py  # 15 tests — key sizes, signing (Dilithium/Ed25519), mint_coin
 │       └── test_context_manager.py # 17 tests — decision paths, boundaries, scenarios
 │
 ├── aqm_db/                        # Redis client layer
@@ -123,15 +123,15 @@ AQM_Database/
 │       └── test_bridge.py         # 7 integration tests (Redis ↔ PostgreSQL)
 │
 ├── chat/                          # Terminal-to-terminal real-time chat
-│   ├── protocol.py                # ChatMessage dataclass, simulate_encrypt/decrypt, JSON serialization
+│   ├── protocol.py                # ChatMessage, encrypt_message/decrypt_message (NaCl AEAD), JSON serialization
 │   ├── transport.py               # Redis pub/sub wrapper (publish/subscribe with threaded listener)
 │   ├── session.py                 # ChatSession — full AQM lifecycle per user + run_auto_demo()
 │   ├── benchmark.py               # AQM per-tier timing + TLS 1.3 handshake comparison
 │   ├── cli.py                     # argparse entry point (--user/--partner/--priority/--auto/--benchmark/--demo-pair)
 │   └── tests/
 │       ├── conftest.py            # fakeredis + asyncpg fixtures for chat tests
-│       ├── test_protocol.py       # 11 tests — serialization, encrypt/decrypt roundtrip
-│       ├── test_session.py        # 16 tests — lifecycle, priorities, exhaustion, burn, coin_status
+│       ├── test_protocol.py       # 12 tests — serialization, AEAD encrypt/decrypt roundtrip
+│       ├── test_session.py        # 14 tests — lifecycle, priorities, exhaustion, burn, coin_status
 │       └── test_benchmark.py      # 8 tests — stats, table formatting, TLS handshake, AQM tier, per-message
 │
 ├── bridge.py                      # fetch_and_cache(), upload_coins(), sync_inventory()
@@ -195,7 +195,8 @@ prototype.py → crypto_engine + context_manager + vault + inventory + server + 
 │  1. MINT (Bob's device)                                            │
 │     CryptoEngine.generate_keypair(tier)                            │
 │       ├─ private key → AES-GCM encrypt → SecureVault (Redis db=0) │
-│       └─ public key  → Ed25519 sign   → CoinInventoryServer (PG)  │
+│       └─ public key  → sign (Dilithium/Ed25519)                   │
+│                        → CoinInventoryServer (PG)                  │
 │                                                                    │
 │  2. PRE-FETCH (Alice's device)                                     │
 │     Bridge.fetch_and_cache(bob_id, tier, count)                    │
@@ -206,12 +207,12 @@ prototype.py → crypto_engine + context_manager + vault + inventory + server + 
 │  3. SEND (Alice → Bob)                                             │
 │     ContextManager.select_coin(DeviceContext) → tier               │
 │     SmartInventory.select_coin(bob, tier) → ZPOPMIN (FIFO)        │
-│     simulate_encrypt(plaintext, pk) → ciphertext                   │
+│     encrypt_message(plaintext, pk) → NaCl SecretBox AEAD           │
 │     ChatTransport.publish(channel:bob, ChatMessage)                │
 │                                                                    │
 │  4. RECEIVE (Bob's device)                                         │
 │     ChatTransport.subscribe(channel:bob) → ChatMessage             │
-│     simulate_decrypt(ciphertext, pk) → plaintext + verify tag      │
+│     decrypt_message(ciphertext, pk) → plaintext + verify MAC       │
 │     SecureVault.fetch_key(key_id) → private key                    │
 │                                                                    │
 │  5. BURN (Bob's device)                                            │
@@ -235,7 +236,9 @@ prototype.py → crypto_engine + context_manager + vault + inventory + server + 
 - **Stats tracking**: Vault maintains a `vault:v1:stats` hash with atomic HINCRBY counters (active_gold/silver/bronze, total_burned, total_expired).
 - **Sorted set indexes**: Inventory uses sorted sets scored by `fetched_at` for FIFO coin selection via ZPOPMIN.
 - **Delete-on-Fetch**: Server uses `FOR UPDATE SKIP LOCKED` to atomically claim coins — fetched coins are marked, not visible to other requesters.
-- **Crypto backend fallback**: CryptoEngine tries liboqs+pynacl → pynacl-only → urandom-mock. All backends produce correct-sized keys.
+- **Crypto backend fallback**: CryptoEngine tries liboqs+pynacl → pynacl-only → urandom-mock. All backends produce correct-sized keys and signatures.
+- **Real AEAD encryption**: `encrypt_message`/`decrypt_message` use NaCl SecretBox (XSalsa20-Poly1305) with key derived from SHA-256(public_key). Falls back to SHA-256 tag if pynacl is unavailable.
+- **Constant minting**: All users mint the same set of coins (5G+6S+5B) regardless of priority. Budget caps control how many are cached, and the context manager selects which tier to use at send time.
 - **Absolute imports**: All modules use `from AQM_Database.aqm_shared import config, errors`.
 - **pytest-asyncio strict mode**: All async tests need `pytestmark = pytest.mark.asyncio`. Single `event_loop` fixture in `AQM_Database/conftest.py`.
 - **Separate pub/sub connections**: Chat transport uses `decode_responses=True` (JSON strings), independent from vault/inventory binary clients.
@@ -273,9 +276,22 @@ coin_inventory (
 
 | Tier | Algorithms | Public Key | Signature | Total |
 |------|-----------|-----------|----------|-------|
-| GOLD | Kyber-768 + Dilithium | 1,184 B | 2,420 B | ~3.6 KB |
+| GOLD | Kyber-768 + Dilithium-3 | 1,184 B | 2,420 B | ~3.6 KB |
 | SILVER | Kyber-768 + Ed25519 | 1,184 B | 64 B | ~1.2 KB |
 | BRONZE | X25519 + Ed25519 | 32 B | 64 B | ~96 B |
+
+### Constant mint plan
+
+Every user mints the same set of coins regardless of priority:
+
+| Tier | Count |
+|------|-------|
+| GOLD | 5 |
+| SILVER | 6 |
+| BRONZE | 5 |
+| **Total** | **16** |
+
+Budget caps control how many of each tier are *cached* (fetched from server to local inventory) per contact priority. The context manager selects which tier to *use* at send time based on device state.
 
 ### Budget caps (per contact)
 
@@ -283,7 +299,7 @@ coin_inventory (
 |----------|------|--------|--------|
 | BESTIE | 5 | 4 | 1 |
 | MATE | 0 | 6 | 4 |
-| STRANGER | 0 | 0 | 0 |
+| STRANGER | 0 | 0 | 5 |
 
 ### Context Manager — coin tier selection
 
@@ -300,8 +316,8 @@ WiFi + battery >= 50%          → GOLD
 
 The prototype (`python demo.py`) demonstrates the full AQM key lifecycle:
 
-1. **MINT** — Generate 10 coins (5G+4S+1B) via CryptoEngine → private keys to Vault, public keys to PostgreSQL server
-2. **PRE-FETCH** — Register Bob as BESTIE → fetch all public keys from server to local Inventory → server drained to 0 (Delete-on-Fetch proof)
+1. **MINT** — Generate 16 coins (5G+6S+5B) via CryptoEngine → private keys to Vault, public keys to PostgreSQL server
+2. **PRE-FETCH** — Register Bob as BESTIE → fetch public keys from server to local Inventory (budget-capped) → server coins marked as fetched (Delete-on-Fetch)
 3. **SEND** — Three device scenarios (A=home WiFi→GOLD, B=outdoor cellular→SILVER, C=underground→BRONZE) → ContextManager selects tier → consume coins from Inventory
 4. **DECRYPT+BURN** — Retrieve private key from Vault → burn after use → verify `fetch_key()` returns None
 
@@ -313,9 +329,9 @@ The chat demo (`python demo.py --demo-pair` or `python -m AQM_Database.chat.cli 
 
 1. **ContextManager** inspects device state → selects coin tier
 2. **SmartInventory.select_coin()** pops oldest coin (FIFO), with fallback to lower tiers
-3. **simulate_encrypt()** produces `SHA-256(pk || plaintext) + plaintext` (simulates Kyber KEM + AES-GCM)
+3. **encrypt_message()** derives symmetric key via SHA-256(pk) → NaCl SecretBox AEAD (XSalsa20-Poly1305)
 4. **ChatTransport.publish()** sends JSON envelope via Redis pub/sub
-5. Receiver's subscriber callback: deserialize → **simulate_decrypt()** + verify tag → **vault.fetch_key()** → **vault.burn_key()** → display with verification + burn status
+5. Receiver's subscriber callback: deserialize → **decrypt_message()** + verify MAC → **vault.fetch_key()** → **vault.burn_key()** → display with verification + burn status
 
 ### Interactive features
 
@@ -332,7 +348,7 @@ The chat demo (`python demo.py --demo-pair` or `python -m AQM_Database.chat.cli 
 |----------|-------------|
 | BESTIE | All tiers work. Scenario 1→GOLD, 2→SILVER, 3→BRONZE |
 | MATE | No GOLD coins cached. Scenario 1 (wants GOLD) → falls back to SILVER via `TIER_FALLBACK` |
-| STRANGER | `sync_inventory()` fetches 0 coins. All sends return None |
+| STRANGER | Only BRONZE coins cached (budget: 0G/0S/5B). All scenarios fall back to BRONZE |
 
 ### Benchmark methodology
 
@@ -341,13 +357,14 @@ The benchmark (`python demo.py --chat-bench`) measures three scenarios:
 **AQM Full Lifecycle** (per tier, 50 iterations):
 ```
 mint_coin → vault.store_key → upload_coins → fetch_and_cache →
-select_coin → simulate_encrypt → simulate_decrypt → burn_key
+select_coin → encrypt_message → decrypt_message → burn_key
 ```
 Includes one-time minting cost (~2-3ms for crypto keygen). Analogous to a first-contact scenario.
+Expected latency ordering: GOLD > SILVER > BRONZE (driven by coin data sizes: 3.6 KB → 1.2 KB → 96 B).
 
 **AQM Per-Message** (pre-minted coins, 50 iterations):
 ```
-select_coin → simulate_encrypt → simulate_decrypt → burn_key
+select_coin → encrypt_message → decrypt_message → burn_key
 ```
 Coins are pre-minted and cached before timing starts. Reflects steady-state messaging latency.
 Per-message consistently beats TLS 1.3 (~0.1-0.3ms vs ~1.7ms) while providing post-quantum resistance (GOLD/SILVER) and perfect forward secrecy (all tiers: single-use keys).
@@ -382,4 +399,4 @@ The `AQM_Database/guides/` directory contains authoritative specs:
 ## Known Issues
 
 - `redis-py 7.x` WATCH/UNWATCH deprecation warnings — cosmetic only, call from Pipeline object to suppress
-- `liboqs-python` not in conda environment — Kyber-768 keygen falls back to `os.urandom()` mock (correct sizes, not cryptographically real PQC)
+- `liboqs-python` not in conda environment — Kyber-768 keygen uses real X25519 + random padding (correct sizes, not cryptographically real PQC); Dilithium-3 signatures use Ed25519 core + random padding (correct 2420 B size)

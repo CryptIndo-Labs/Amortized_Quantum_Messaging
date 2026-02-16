@@ -31,18 +31,16 @@ from AQM_Database.aqm_server import config as srv_config
 from AQM_Database.aqm_server.db import create_pool, close_pool
 from AQM_Database.bridge import upload_coins, sync_inventory
 from AQM_Database.chat.protocol import (
-    build_message, simulate_decrypt, ChatMessage,
+    build_message, decrypt_message, ChatMessage,
 )
 from AQM_Database.chat.transport import ChatTransport
 from AQM_Database.prototype import Display
 
 
-# Mint plan by priority — how many coins the user mints for themselves
-MINT_PLANS = {
-    "BESTIE":   [("GOLD", 5), ("SILVER", 4), ("BRONZE", 1)],
-    "MATE":     [("GOLD", 0), ("SILVER", 6), ("BRONZE", 4)],
-    "STRANGER": [],
-}
+# Constant mint plan — every user mints the same set of coins.
+# Budget caps (config.BUDGET_CAPS) control how many are *cached* per priority;
+# the context manager selects the tier at send time.
+MINT_PLAN = [("GOLD", 5), ("SILVER", 6), ("BRONZE", 5)]
 
 
 class ChatSession:
@@ -108,16 +106,15 @@ class ChatSession:
     async def provision(self) -> dict[str, int]:
         """Mint coins for this user and upload to server.
 
+        Uses the constant MINT_PLAN regardless of priority — every user
+        mints the same set.  Budget caps control caching, not minting.
+
         Returns dict of {tier: count_minted}.
         """
-        plan = MINT_PLANS.get(self.priority, [])
         all_uploads: list[CoinUpload] = []
         minted = {}
 
-        for tier, count in plan:
-            if count == 0:
-                minted[tier] = 0
-                continue
+        for tier, count in MINT_PLAN:
             for _ in range(count):
                 bundle = mint_coin(self.engine, tier)
                 self.vault.store_key(
@@ -135,8 +132,7 @@ class ChatSession:
                 ))
             minted[tier] = count
 
-        if all_uploads:
-            await upload_coins(self.server, self.user_id, all_uploads)
+        await upload_coins(self.server, self.user_id, all_uploads)
 
         return minted
 
@@ -229,7 +225,7 @@ class ChatSession:
         public_key = base64.b64decode(msg.public_key_b64)
 
         # Decrypt
-        plaintext, verified = simulate_decrypt(ciphertext, public_key)
+        plaintext, verified = decrypt_message(ciphertext, public_key)
 
         # Burn the private key from vault (if we hold it)
         burned = False
@@ -374,7 +370,7 @@ async def run_auto_demo() -> None:
 
             if total_cached == 0:
                 Display.arrow(
-                    f"STRANGER has zero budget — cannot message"
+                    f"No coins fetched (budget or server empty)"
                 )
                 continue
 

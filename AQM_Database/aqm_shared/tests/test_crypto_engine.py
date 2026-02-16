@@ -10,6 +10,8 @@ from AQM_Database.aqm_shared.crypto_engine import (
     KYBER768_SK_SIZE,
     X25519_PK_SIZE,
     X25519_SK_SIZE,
+    ED25519_SIG_SIZE,
+    DILITHIUM3_SIG_SIZE,
 )
 from AQM_Database.aqm_shared.errors import InvalidCoinCategoryError
 
@@ -78,14 +80,24 @@ def test_generate_keypair_rejects_invalid_category(engine):
 
 # ─── Signing ───
 
-def test_sign_key_returns_bytes(engine):
+def test_sign_key_gold_dilithium_size(engine):
     pk, _ = engine.generate_keypair("GOLD")
     sig = engine.sign_key(pk, "GOLD")
     assert isinstance(sig, bytes)
-    assert len(sig) > 0
+    assert len(sig) == DILITHIUM3_SIG_SIZE
 
 
-def test_sign_key_deterministic_for_same_input(engine):
+def test_sign_key_silver_ed25519_size(engine):
+    pk, _ = engine.generate_keypair("SILVER")
+    sig = engine.sign_key(pk, "SILVER")
+    assert isinstance(sig, bytes)
+    if engine.backend == "urandom-mock":
+        assert len(sig) == 32  # SHA-256 fallback
+    else:
+        assert len(sig) == ED25519_SIG_SIZE
+
+
+def test_sign_key_bronze_deterministic(engine):
     pk, _ = engine.generate_keypair("BRONZE")
     sig1 = engine.sign_key(pk, "BRONZE")
     sig2 = engine.sign_key(pk, "BRONZE")
