@@ -45,6 +45,16 @@ TIER_FALLBACK = {
     "BRONZE": [],
 }
 
+# Per-priority tier ceiling — applied after context decision tree
+TIER_CEILING = {
+    "BESTIE":   "GOLD",     # full range
+    "MATE":     "SILVER",   # max SILVER even if context says GOLD
+    "STRANGER": "BRONZE",   # always BRONZE regardless of context
+}
+
+# Numeric rank for tier comparison (used by ceiling logic)
+TIER_RANK = {"GOLD": 3, "SILVER": 2, "BRONZE": 1}
+
 # Valid Enums (for validation)
 
 VALID_COIN_CATEGORIES   = {"GOLD", "SILVER", "BRONZE"}

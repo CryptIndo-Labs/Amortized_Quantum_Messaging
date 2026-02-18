@@ -13,6 +13,7 @@ Decision tree:
     WiFi + battery >= 50%          → GOLD
 """
 
+import random
 from dataclasses import dataclass
 
 
@@ -77,3 +78,26 @@ SCENARIO_C = DeviceContext(
 )
 
 SCENARIOS = [SCENARIO_A, SCENARIO_B, SCENARIO_C]
+
+
+def random_context() -> DeviceContext:
+    """Generate a random DeviceContext simulating real-world fluctuation.
+
+    Battery: uniform 0-100%
+    WiFi: 60% chance True (biased toward connected)
+    Signal: uniform -130 to -40 dBm
+    """
+    battery = round(random.uniform(0, 100), 1)
+    wifi = random.random() < 0.6
+    signal = round(random.uniform(-130, -40), 1)
+    label = (
+        f"bat={battery:.0f}%, "
+        f"{'WiFi' if wifi else 'cell'}, "
+        f"sig={signal:.0f}dBm"
+    )
+    return DeviceContext(
+        battery_pct=battery,
+        wifi_connected=wifi,
+        signal_dbm=signal,
+        label=label,
+    )

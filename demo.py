@@ -8,7 +8,9 @@ Usage:
     python demo.py --tests      Run the full test suite (171 tests)
     python demo.py --all        Run tests first, then demo
     python demo.py --chat       Run two-user chat demo (all priority scenarios)
-    python demo.py --demo-pair  Launch two terminals for interactive chat
+    python demo.py --demo-pair  Launch two terminals for interactive chat (default: BESTIE)
+    python demo.py --demo-pair --priority MATE     Demo with MATE priority
+    python demo.py --demo-pair --priority STRANGER  Demo with STRANGER handshake
     python demo.py --chat-bench Run AQM vs TLS 1.3 benchmark
 
 Requires:
@@ -181,7 +183,9 @@ examples:
   python demo.py --tests      Run the full test suite
   python demo.py --all        Run tests first, then demo
   python demo.py --chat       Run two-user chat demo (all priority scenarios)
-  python demo.py --demo-pair  Launch two terminals for interactive chat
+  python demo.py --demo-pair  Launch two terminals (default: BESTIE)
+  python demo.py --demo-pair --priority MATE      MATE with SILVER ceiling
+  python demo.py --demo-pair --priority STRANGER  STRANGER handshake demo
   python demo.py --chat-bench Run AQM vs TLS 1.3 benchmark
         """,
     )
@@ -190,6 +194,8 @@ examples:
     parser.add_argument("--all", action="store_true", help="Run tests first, then demo")
     parser.add_argument("--chat", action="store_true", help="Run two-user chat demo (all priorities)")
     parser.add_argument("--demo-pair", action="store_true", help="Launch two terminals for interactive chat")
+    parser.add_argument("--priority", choices=["BESTIE", "MATE", "STRANGER"],
+                        default="BESTIE", help="Priority for --demo-pair (default: BESTIE)")
     parser.add_argument("--chat-bench", action="store_true", help="Run AQM vs TLS 1.3 benchmark")
     return parser.parse_args()
 
@@ -198,10 +204,10 @@ def main():
     args = parse_args()
 
     print(f"""
-{CYAN}{BOLD}    ┌─────────────────────────────────────────────────┐
-    │   AQM — Amortized Quantum Messaging               │
+{CYAN}{BOLD}    ┌────────────────────────────────────────────────────┐
+    │   AQM — Amortized Quantum Messaging                │
     │   Post-Quantum Key Lifecycle Demo Runner           │
-    └─────────────────────────────────────────────────────┘{RESET}
+    └────────────────────────────────────────────────────┘{RESET}
     """)
 
     if args.check:
@@ -222,7 +228,7 @@ def main():
             fail("Preflight failed — aborting")
             sys.exit(1)
         from AQM_Database.chat.cli import launch_demo_pair
-        launch_demo_pair("BESTIE")
+        launch_demo_pair(args.priority)
         sys.exit(0)
 
     if args.chat_bench:

@@ -21,6 +21,7 @@ from AQM_Database.aqm_shared.crypto_engine import CryptoEngine, mint_coin
 from AQM_Database.aqm_shared.context_manager import (
     ContextManager, DeviceContext,
     SCENARIO_A, SCENARIO_B, SCENARIO_C,
+    random_context,
 )
 from AQM_Database.aqm_shared.types import CoinUpload
 from AQM_Database.aqm_db.vault import SecureVault
@@ -29,7 +30,7 @@ from AQM_Database.aqm_db.connection import create_vault_client, create_inventory
 from AQM_Database.aqm_server.coin_inventory import CoinInventoryServer
 from AQM_Database.aqm_server import config as srv_config
 from AQM_Database.aqm_server.db import create_pool, close_pool
-from AQM_Database.bridge import upload_coins, sync_inventory
+from AQM_Database.bridge import upload_coins, sync_inventory, fetch_and_cache
 from AQM_Database.chat.protocol import (
     build_message, decrypt_message, ChatMessage,
 )
@@ -168,6 +169,62 @@ class ChatSession:
             self.partner_name, self.partner_id, self.user_id,
         )
 
+    async def stranger_handshake(
+        self,
+        timeout: float = 30.0,
+        poll_interval: float = 0.5,
+    ) -> dict[str, int]:
+        """STRANGER first-contact: mint 5 BRONZE coins, share public keys.
+
+        Alice can't prefetch Bob's key because he's a stranger.
+        Instead: mint 5 BRONZE → upload → poll for partner's BRONZE → fetch 5.
+
+        Returns dict of {tier: count_fetched}.
+        """
+        # Register partner as STRANGER
+        self.inventory.register_contact(
+            self.partner_name, self.priority, display_name=self.partner_name,
+        )
+
+        # Mint 5 BRONZE coins for ourselves
+        uploads = []
+        for _ in range(5):
+            bundle = mint_coin(self.engine, "BRONZE")
+            self.vault.store_key(
+                key_id=bundle.key_id,
+                coin_category="BRONZE",
+                encrypted_blob=bundle.encrypted_blob,
+                encryption_iv=bundle.encryption_iv,
+                auth_tag=bundle.auth_tag,
+            )
+            uploads.append(CoinUpload(
+                key_id=bundle.key_id,
+                coin_category="BRONZE",
+                public_key_blob=bundle.public_key,
+                signature_blob=bundle.signature,
+            ))
+        await upload_coins(self.server, self.user_id, uploads)
+
+        # Poll for partner's BRONZE coins on server
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            inv = await self.server.get_inventory_count(self.partner_id)
+            if inv.bronze > 0:
+                break
+            await asyncio.sleep(poll_interval)
+
+        # Fetch 5 BRONZE from partner
+        cached = await fetch_and_cache(
+            self.server, self.inventory,
+            self.partner_name, self.partner_id, self.user_id,
+            "BRONZE", 5,
+        )
+        return {
+            "GOLD": 0,
+            "SILVER": 0,
+            "BRONZE": len(cached),
+        }
+
     def coin_status(self) -> dict[str, int]:
         """Return remaining coin counts per tier in local inventory."""
         try:
@@ -187,9 +244,16 @@ class ChatSession:
     ) -> Optional[ChatMessage]:
         """Select coin based on device context, encrypt, and publish.
 
+        Applies per-priority tier ceiling after the context decision tree.
         Returns the ChatMessage sent, or None if no coins available.
         """
         tier = self.cm.select_coin(context)
+
+        # Apply per-priority tier ceiling
+        ceiling = config.TIER_CEILING[self.priority]
+        if config.TIER_RANK[tier] > config.TIER_RANK[ceiling]:
+            tier = ceiling
+
         entry = self.inventory.select_coin(self.partner_name, tier)
         if entry is None:
             return None
@@ -308,23 +372,19 @@ async def run_auto_demo() -> None:
     """Single-terminal auto demo — runs all 3 priority scenarios.
 
     For each priority, Alice and Bob provision, exchange messages under
-    three device scenarios, then clean up.
+    random device contexts (simulating real-world fluctuation), then clean up.
+    STRANGER uses a first-contact handshake instead of normal provisioning.
     """
     Display.banner()
     print(f"{Display.CYAN}{Display.BOLD}"
           f"    Two-User Chat Demo — Priority Scenarios"
           f"{Display.RESET}\n")
 
-    scenarios = [
-        ("A", SCENARIO_A),
-        ("B", SCENARIO_B),
-        ("C", SCENARIO_C),
-    ]
-
     for priority in ("BESTIE", "MATE", "STRANGER"):
+        ceiling = config.TIER_CEILING[priority]
         Display.phase_header(
             ["BESTIE", "MATE", "STRANGER"].index(priority) + 1,
-            f"Priority: {priority}",
+            f"Priority: {priority}  (ceiling: {ceiling})",
         )
 
         alice = ChatSession("alice", "bob", priority)
@@ -352,52 +412,93 @@ async def run_auto_demo() -> None:
             await alice.cleanup_server_data()
             await bob.cleanup_server_data()
 
-            # Provision
-            Display.section("Provisioning")
-
-            bob_minted = await bob.provision()
-            Display.success(f"Bob minted: {bob_minted}")
-
-            alice_minted = await alice.provision()
-            Display.success(f"Alice minted: {alice_minted}")
-
-            # Register and fetch
-            fetched = await alice.register_and_fetch(timeout=5.0)
-            Display.success(f"Alice cached Bob's keys: {fetched}")
-
-            caps = config.BUDGET_CAPS[priority]
-            total_cached = sum(fetched.values())
-
-            if total_cached == 0:
+            if priority == "STRANGER":
+                # ── STRANGER handshake — no prefetch, mint 1 BRONZE each ──
+                Display.section("STRANGER Handshake")
                 Display.arrow(
-                    f"No coins fetched (budget or server empty)"
+                    "First contact — no pre-fetched coins. "
+                    "Minting 5 BRONZE each…"
                 )
-                continue
+                alice_hs, bob_hs = await asyncio.gather(
+                    alice.stranger_handshake(timeout=10.0),
+                    bob.stranger_handshake(timeout=10.0),
+                )
+                Display.success(
+                    f"Alice fetched {alice_hs['BRONZE']} BRONZE from Bob"
+                )
+                Display.success(
+                    f"Bob fetched {bob_hs['BRONZE']} BRONZE from Alice"
+                )
+                msg_count = 1  # 1 coin each direction
+            else:
+                # ── Normal provisioning for BESTIE / MATE ──
+                Display.section("Provisioning")
+
+                bob_minted = await bob.provision()
+                Display.success(f"Bob minted: {bob_minted}")
+
+                alice_minted = await alice.provision()
+                Display.success(f"Alice minted: {alice_minted}")
+
+                # Register and fetch
+                fetched = await alice.register_and_fetch(timeout=5.0)
+                Display.success(f"Alice cached Bob's keys: {fetched}")
+
+                total_cached = sum(fetched.values())
+                if total_cached == 0:
+                    Display.arrow(
+                        "No coins fetched (budget or server empty)"
+                    )
+                    continue
+
+                msg_count = 5  # enough to show context fluctuation
 
             # Bob listens
             bob.start_listening(on_bob_receive)
             await asyncio.sleep(0.1)
 
-            # Alice sends under each device scenario
-            Display.section("Sending messages")
-            for label, ctx in scenarios:
-                tier = alice.cm.select_coin(ctx)
-                Display.arrow(
-                    f"Scenario {label}: {ctx.label} "
-                    f"→ wants {Display.tier_label(tier)}"
+            # Alice sends under random device contexts
+            Display.section("Sending messages (random context)")
+            for i in range(msg_count):
+                ctx = random_context()
+                raw_tier = alice.cm.select_coin(ctx)
+                effective = (
+                    ceiling
+                    if config.TIER_RANK[raw_tier] > config.TIER_RANK[ceiling]
+                    else raw_tier
                 )
 
+                cap_note = ""
+                if raw_tier != effective:
+                    cap_note = (
+                        f"  {Display.YELLOW}! context wanted {raw_tier} "
+                        f"→ capped to {effective}{Display.RESET}"
+                    )
+
+                Display.arrow(
+                    f"Msg {i + 1}: {ctx.label} "
+                    f"→ tree={Display.tier_label(raw_tier)}"
+                    f"  ceiling={Display.tier_label(ceiling)}"
+                )
+                if cap_note:
+                    print(cap_note)
+
                 msg = alice.send_message(
-                    f"Hello from scenario {label}!", ctx,
+                    f"Hello #{i + 1} ({ctx.label})!", ctx,
                 )
                 if msg:
                     Display.success(
                         f"Sent via {Display.tier_label(msg.coin_tier)}  "
                         f"key={msg.key_id[:8]}…"
                     )
+                    if msg.coin_tier != effective:
+                        print(
+                            f"           {Display.YELLOW}! wanted {effective} "
+                            f"→ fell back to {msg.coin_tier}{Display.RESET}"
+                        )
                 else:
                     Display.arrow(
-                        f"No coins available (tier exhausted or fallback empty)"
+                        "No coins available (tier exhausted or fallback empty)"
                     )
 
             # Give pub/sub a moment to deliver

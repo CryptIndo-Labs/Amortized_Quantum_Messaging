@@ -33,7 +33,9 @@ python demo.py --check          # only run preflight checks
 python demo.py --tests          # run the full test suite (173 tests)
 python demo.py --all            # tests first, then demo
 python demo.py --chat           # two-user chat demo (all 3 priority scenarios)
-python demo.py --demo-pair      # launch two terminals for interactive chat
+python demo.py --demo-pair      # launch two terminals (default: BESTIE)
+python demo.py --demo-pair --priority MATE      # MATE with SILVER ceiling
+python demo.py --demo-pair --priority STRANGER  # STRANGER handshake demo
 python demo.py --chat-bench     # AQM vs TLS 1.3 benchmark
 python -m AQM_Database.prototype  # run demo directly (no preflight)
 ```
@@ -42,7 +44,9 @@ python -m AQM_Database.prototype  # run demo directly (no preflight)
 
 ```bash
 # Launch two terminals automatically (alice + bob)
-python demo.py --demo-pair
+python demo.py --demo-pair                              # default: BESTIE
+python demo.py --demo-pair --priority MATE              # MATE with SILVER ceiling
+python demo.py --demo-pair --priority STRANGER          # STRANGER handshake
 python -m AQM_Database.chat.cli --demo-pair
 python -m AQM_Database.chat.cli --demo-pair --priority MATE
 
@@ -238,7 +242,8 @@ prototype.py → crypto_engine + context_manager + vault + inventory + server + 
 - **Delete-on-Fetch**: Server uses `FOR UPDATE SKIP LOCKED` to atomically claim coins — fetched coins are marked, not visible to other requesters.
 - **Crypto backend fallback**: CryptoEngine tries liboqs+pynacl → pynacl-only → urandom-mock. All backends produce correct-sized keys and signatures.
 - **Real AEAD encryption**: `encrypt_message`/`decrypt_message` use NaCl SecretBox (XSalsa20-Poly1305) with key derived from SHA-256(public_key). Falls back to SHA-256 tag if pynacl is unavailable.
-- **Constant minting**: All users mint the same set of coins (5G+6S+5B) regardless of priority. Budget caps control how many are cached, and the context manager selects which tier to use at send time.
+- **Constant minting**: All users mint the same set of coins (5G+6S+5B) regardless of priority. Budget caps control how many are cached, and the context manager selects which tier to use at send time. Exception: STRANGER contacts use a handshake flow (mint 1 BRONZE only).
+- **Tier ceilings**: Per-priority cap applied after context decision tree: BESTIE=GOLD, MATE=SILVER, STRANGER=BRONZE. Prevents lower-priority contacts from using higher-tier coins even if device context allows it.
 - **Absolute imports**: All modules use `from AQM_Database.aqm_shared import config, errors`.
 - **pytest-asyncio strict mode**: All async tests need `pytestmark = pytest.mark.asyncio`. Single `event_loop` fixture in `AQM_Database/conftest.py`.
 - **Separate pub/sub connections**: Chat transport uses `decode_responses=True` (JSON strings), independent from vault/inventory binary clients.
@@ -312,6 +317,24 @@ WiFi + 20% <= battery < 50%    → SILVER
 WiFi + battery >= 50%          → GOLD
 ```
 
+### Tier ceilings (per priority)
+
+After the decision tree selects a tier, a per-priority ceiling caps it:
+
+| Priority | Ceiling | Effect |
+|----------|---------|--------|
+| BESTIE | GOLD | Full range — context tree result used as-is |
+| MATE | SILVER | GOLD is capped to SILVER; SILVER/BRONZE pass through |
+| STRANGER | BRONZE | Everything capped to BRONZE regardless of context |
+
+### Random context
+
+In the interactive chat demo, device context (battery, WiFi, signal) **fluctuates randomly** between messages — simulating real-world conditions while texting. The context manager decision tree + tier ceiling determine the coin tier per message:
+
+- **BESTIE**: coin tier shifts GOLD → SILVER → BRONZE (and back up) as context changes
+- **MATE**: shifts SILVER → BRONZE (and back up); can't exceed SILVER ceiling
+- **STRANGER**: always BRONZE regardless of context
+
 ## Prototype Demo — 4-phase lifecycle
 
 The prototype (`python demo.py`) demonstrates the full AQM key lifecycle:
@@ -337,18 +360,30 @@ The chat demo (`python demo.py --demo-pair` or `python -m AQM_Database.chat.cli 
 
 - **Real-time display**: incoming messages appear instantly via threaded pub/sub listener
 - **Live coin counter**: prompt shows `[G:5 S:4 B:1]` remaining coins
-- **Device scenarios**: prefix with `1` (WiFi→GOLD), `2` (cellular→SILVER), `3` (underground→BRONZE)
+- **Random context**: device state (battery, WiFi, signal) fluctuates randomly per message — coin tier shifts dynamically
+- **Tier ceiling**: per-priority cap applied after context decision tree (BESTIE=GOLD, MATE=SILVER, STRANGER=BRONZE)
 - **Lifecycle detail**: each message shows key ID, device context, encrypt→publish / decrypt→verify→burn
 - **Tier fallback**: displays "wanted GOLD → fell back to SILVER" when tier is unavailable
+- **Ceiling cap**: displays "context wanted GOLD → capped to SILVER (ceiling)" when ceiling triggers
 - **`--demo-pair`**: auto-detects terminal emulator (tmux/gnome-terminal/konsole/xfce4-terminal/xterm) and spawns both windows
+- **`--priority`**: pass `BESTIE`, `MATE`, or `STRANGER` to `--demo-pair` to demo each scenario
 
 ### Priority coverage
 
-| Priority | What happens |
-|----------|-------------|
-| BESTIE | All tiers work. Scenario 1→GOLD, 2→SILVER, 3→BRONZE |
-| MATE | No GOLD coins cached. Scenario 1 (wants GOLD) → falls back to SILVER via `TIER_FALLBACK` |
-| STRANGER | Only BRONZE coins cached (budget: 0G/0S/5B). All scenarios fall back to BRONZE |
+| Priority | Tier Ceiling | What happens |
+|----------|-------------|-------------|
+| BESTIE | GOLD | Full range: random context yields GOLD/SILVER/BRONZE dynamically |
+| MATE | SILVER | Capped at SILVER: context may want GOLD but ceiling limits to SILVER; shifts SILVER↔BRONZE |
+| STRANGER | BRONZE | Always BRONZE: initial handshake (mint 1 BRONZE, share public key), no prefetch |
+
+### STRANGER handshake
+
+STRANGER contacts can't prefetch each other's public keys (first-time texting). Instead of the normal provision+fetch flow:
+
+1. Each side mints **1 BRONZE coin** and uploads the public key to the server
+2. Each side polls for the partner's BRONZE coin and fetches it
+3. Chat begins with 1 BRONZE coin per direction
+4. Tier ceiling ensures all messages use BRONZE regardless of device context
 
 ### Benchmark methodology
 

@@ -31,7 +31,7 @@ from queue import Queue, Empty
 from AQM_Database.prototype import Display
 from AQM_Database.aqm_shared import config
 from AQM_Database.aqm_shared.context_manager import (
-    DeviceContext, SCENARIO_A, SCENARIO_B, SCENARIO_C,
+    DeviceContext, random_context,
 )
 from AQM_Database.chat.session import ChatSession, run_auto_demo
 from AQM_Database.chat.benchmark import run_benchmark
@@ -45,13 +45,6 @@ RESTORE_POS = "\033[u"
 MOVE_UP = "\033[A"
 
 D = Display  # shorthand
-
-
-SCENARIOS = {
-    "1": ("Home WiFi, 80% battery", SCENARIO_A, "GOLD"),
-    "2": ("Outdoor cellular, 40% battery", SCENARIO_B, "SILVER"),
-    "3": ("Underground, 3% battery", SCENARIO_C, "BRONZE"),
-}
 
 
 def _coin_bar(status: dict[str, int]) -> str:
@@ -140,77 +133,108 @@ async def interactive_chat(user: str, partner: str, priority: str) -> None:
           f"{D.BOLD}Partner:{D.RESET} {D.CYAN}{partner}{D.RESET}  "
           f"{D.BOLD}Priority:{D.RESET} {priority}\n")
 
+    ceiling = config.TIER_CEILING[priority]
+
     session = ChatSession(user, partner, priority)
     await session.setup()
 
-    # ── Phase 1: Provision ──
-    print(f"  {D.MAGENTA}{D.BOLD}── Phase 1: Mint & Upload ──{D.RESET}")
-    print(f"  {D.DIM}Generating keypairs, storing private keys in vault,")
-    print(f"  uploading public keys to PostgreSQL server…{D.RESET}")
-    minted = await session.provision()
-    total_minted = sum(minted.get(t, 0) for t in ("GOLD", "SILVER", "BRONZE"))
-    print(f"  {D.GREEN}✓{D.RESET} Minted {D.BOLD}{total_minted}{D.RESET} coins "
-          f"({D.YELLOW}G:{minted.get('GOLD', 0)}{D.RESET} "
-          f"{D.WHITE}S:{minted.get('SILVER', 0)}{D.RESET} "
-          f"{D.ORANGE}B:{minted.get('BRONZE', 0)}{D.RESET}) "
-          f"→ vault + server\n")
+    if priority == "STRANGER":
+        # ── STRANGER Handshake — no prefetch, mint 5 BRONZE ──
+        print(f"  {D.MAGENTA}{D.BOLD}── STRANGER Handshake ──{D.RESET}")
+        print(f"  {D.DIM}First contact: no pre-fetched coins.")
+        print(f"  Minting 5 BRONZE coins, sharing public keys…{D.RESET}")
 
-    # ── Phase 2: Fetch partner keys ──
-    print(f"  {D.MAGENTA}{D.BOLD}── Phase 2: Fetch Partner Keys ──{D.RESET}")
-    print(f"  {D.DIM}Waiting for {partner}'s public keys on server…{D.RESET}", end="", flush=True)
+        hs_done = False
 
-    # Animated wait
-    fetch_done = False
+        async def _handshake():
+            nonlocal hs_done
+            result = await session.stranger_handshake(timeout=120.0)
+            hs_done = True
+            return result
 
-    async def _fetch():
-        nonlocal fetch_done
-        result = await session.register_and_fetch(timeout=120.0, poll_interval=0.5)
-        fetch_done = True
-        return result
+        hs_task = asyncio.create_task(_handshake())
 
-    fetch_task = asyncio.create_task(_fetch())
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        i = 0
+        while not hs_done:
+            print(f"\r  {D.CYAN}{spinner[i % len(spinner)]}{D.RESET} "
+                  f"Waiting for {partner}'s BRONZE coins…", end="", flush=True)
+            i += 1
+            await asyncio.sleep(0.1)
 
-    # Spinner while waiting
-    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    i = 0
-    while not fetch_done:
-        print(f"\r  {D.CYAN}{spinner[i % len(spinner)]}{D.RESET} "
-              f"Waiting for {partner}'s keys on server…", end="", flush=True)
-        i += 1
-        await asyncio.sleep(0.1)
+        handshake = await hs_task
+        print(f"\r{CLEAR_LINE}", end="")
 
-    fetched = await fetch_task
-    total_fetched = sum(fetched.values())
-    print(f"\r{CLEAR_LINE}", end="")
-
-    if total_fetched > 0:
-        print(f"  {D.GREEN}✓{D.RESET} Cached {D.BOLD}{total_fetched}{D.RESET} of {partner}'s keys "
-              f"({D.YELLOW}G:{fetched['GOLD']}{D.RESET} "
-              f"{D.WHITE}S:{fetched['SILVER']}{D.RESET} "
-              f"{D.ORANGE}B:{fetched['BRONZE']}{D.RESET}) "
-              f"← server (Delete-on-Fetch)")
+        if handshake["BRONZE"] > 0:
+            print(f"  {D.GREEN}✓{D.RESET} Handshake complete — "
+                  f"5 BRONZE coins exchanged. Ready to chat.")
+        else:
+            print(f"  {D.RED}✗ Handshake failed — partner not found.{D.RESET}")
+            await session.teardown()
+            return
     else:
-        print(f"  {D.YELLOW}!{D.RESET} No keys fetched "
-              f"({priority} budget: {config.BUDGET_CAPS[priority]})")
-        if priority == "STRANGER":
-            print(f"\n  {D.RED}STRANGER contacts have zero budget — "
-                  f"cannot exchange messages.{D.RESET}")
+        # ── Phase 1: Provision ──
+        print(f"  {D.MAGENTA}{D.BOLD}── Phase 1: Mint & Upload ──{D.RESET}")
+        print(f"  {D.DIM}Generating keypairs, storing private keys in vault,")
+        print(f"  uploading public keys to PostgreSQL server…{D.RESET}")
+        minted = await session.provision()
+        total_minted = sum(minted.get(t, 0) for t in ("GOLD", "SILVER", "BRONZE"))
+        print(f"  {D.GREEN}✓{D.RESET} Minted {D.BOLD}{total_minted}{D.RESET} coins "
+              f"({D.YELLOW}G:{minted.get('GOLD', 0)}{D.RESET} "
+              f"{D.WHITE}S:{minted.get('SILVER', 0)}{D.RESET} "
+              f"{D.ORANGE}B:{minted.get('BRONZE', 0)}{D.RESET}) "
+              f"→ vault + server\n")
+
+        # ── Phase 2: Fetch partner keys ──
+        print(f"  {D.MAGENTA}{D.BOLD}── Phase 2: Fetch Partner Keys ──{D.RESET}")
+        print(f"  {D.DIM}Waiting for {partner}'s public keys on server…{D.RESET}", end="", flush=True)
+
+        fetch_done = False
+
+        async def _fetch():
+            nonlocal fetch_done
+            result = await session.register_and_fetch(timeout=120.0, poll_interval=0.5)
+            fetch_done = True
+            return result
+
+        fetch_task = asyncio.create_task(_fetch())
+
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        i = 0
+        while not fetch_done:
+            print(f"\r  {D.CYAN}{spinner[i % len(spinner)]}{D.RESET} "
+                  f"Waiting for {partner}'s keys on server…", end="", flush=True)
+            i += 1
+            await asyncio.sleep(0.1)
+
+        fetched = await fetch_task
+        total_fetched = sum(fetched.values())
+        print(f"\r{CLEAR_LINE}", end="")
+
+        if total_fetched > 0:
+            print(f"  {D.GREEN}✓{D.RESET} Cached {D.BOLD}{total_fetched}{D.RESET} of {partner}'s keys "
+                  f"({D.YELLOW}G:{fetched['GOLD']}{D.RESET} "
+                  f"{D.WHITE}S:{fetched['SILVER']}{D.RESET} "
+                  f"{D.ORANGE}B:{fetched['BRONZE']}{D.RESET}) "
+                  f"← server (Delete-on-Fetch)")
+        else:
+            print(f"  {D.YELLOW}!{D.RESET} No keys fetched "
+                  f"({priority} budget: {config.BUDGET_CAPS[priority]})")
             await session.teardown()
             return
 
     # ── Phase 3: Chat ──
-    print(f"\n  {D.MAGENTA}{D.BOLD}── Phase 3: Secure Chat ──{D.RESET}")
+    print(f"\n  {D.MAGENTA}{D.BOLD}── Secure Chat ──{D.RESET}")
     coins = session.coin_status()
     print(f"  Coins available: {_coin_bar(coins)}")
+    print(f"  Tier ceiling: {D.tier_label(ceiling)}  (priority: {priority})")
     print()
     print(f"  {D.DIM}╭─────────────────────────────────────────────────────╮")
-    print(f"  │  Device scenarios:                                    │")
-    print(f"  │    {D.BOLD}1{D.DIM} = Home WiFi, full battery      → {D.YELLOW}GOLD{D.DIM}          │")
-    print(f"  │    {D.BOLD}2{D.DIM} = Outdoor cellular              → {D.WHITE}SILVER{D.DIM}        │")
-    print(f"  │    {D.BOLD}3{D.DIM} = Underground, critical battery → {D.ORANGE}BRONZE{D.DIM}       │")
+    print(f"  │  Context: RANDOM per message                          │")
+    print(f"  │  (battery, WiFi, signal fluctuate each send)          │")
+    print(f"  │  Tier ceiling: {ceiling:<8s}                               │")
     print(f"  │                                                       │")
-    print(f"  │  Type a message to send (default scenario: 1)         │")
-    print(f"  │  Prefix with 1/2/3 + space to pick scenario           │")
+    print(f"  │  Type a message to send                               │")
     print(f"  │  Commands: /status  /quit                             │")
     print(f"  ╰─────────────────────────────────────────────────────╯{D.RESET}")
     print()
@@ -279,22 +303,28 @@ async def interactive_chat(user: str, partner: str, priority: str) -> None:
                       f"burned={vs.total_burned}")
                 continue
 
-            # Parse scenario prefix
-            scenario_key = "1"
+            # Random context per message
             text = line
-            if len(line) > 2 and line[0] in SCENARIOS and line[1] == " ":
-                scenario_key = line[0]
-                text = line[2:]
+            ctx = random_context()
+            raw_tier = session.cm.select_coin(ctx)
+            effective = (
+                ceiling
+                if config.TIER_RANK[raw_tier] > config.TIER_RANK[ceiling]
+                else raw_tier
+            )
 
-            ctx_label, ctx, expected_tier = SCENARIOS[scenario_key]
             msg = session.send_message(text, ctx)
 
             if msg:
-                _print_msg_sent(user, text, msg.coin_tier, msg.key_id, ctx_label)
+                _print_msg_sent(user, text, msg.coin_tier, msg.key_id, ctx.label)
 
+                # Show ceiling cap if it triggered
+                if raw_tier != effective:
+                    print(f"           {D.YELLOW}! context wanted {raw_tier} "
+                          f"→ capped to {effective} (ceiling: {ceiling}){D.RESET}")
                 # Show fallback if it happened
-                if msg.coin_tier != expected_tier:
-                    print(f"           {D.YELLOW}! wanted {expected_tier} "
+                if msg.coin_tier != effective:
+                    print(f"           {D.YELLOW}! wanted {effective} "
                           f"→ fell back to {msg.coin_tier}{D.RESET}")
             else:
                 print(f"  {D.RED}✗ No coins available — all tiers exhausted{D.RESET}")
