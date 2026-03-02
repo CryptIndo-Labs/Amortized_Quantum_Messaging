@@ -8,14 +8,13 @@ If either dependency is missing, ImportError crashes immediately.
 import os
 
 import uuid
-from ast import Bytes
 from dataclasses import dataclass
 
 import oqs                # Kyber-768 KEM + Dilithium-3 — REQUIRED
 import nacl.signing       # Ed25519 — REQUIRED
 import nacl.public        # X25519 — REQUIRED
 from nacl.exceptions import BadSignatureError
-from nacl import bindings
+import nacl.bindings
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 
@@ -38,20 +37,14 @@ class MintedCoinBundle:
     public_key: bytes
     secret_key: bytes
     signature: bytes
+    signing_public_key: bytes | None = None   # Dilithium pk (GOLD only)
 
 
-def generate_keypair_silver() -> tuple[bytes, bytes]:
+def generate_keypair_gold_silver() -> tuple[bytes, bytes]:
     with oqs.KeyEncapsulation("Kyber768") as kem:
         public_key = kem.generate_keypair()
         secret_key = kem.export_secret_key()
         return bytes(public_key), bytes(secret_key)
-
-
-def generate_keypair_gold() -> tuple[bytes, bytes]:
-    with oqs.KeyEncapsulation("Kyber768") as kem:
-        public_key = kem.generate_keypair()
-        private_key = kem.export_secret_key()
-        return bytes(public_key), bytes(private_key)
 
 
 class CryptoEngine:
@@ -61,27 +54,29 @@ class CryptoEngine:
         self._signing_key = nacl.signing.SigningKey.generate()
 
     def generate_keypair_bronze(self) -> tuple[bytes, bytes]:
-        sk = self._signing_key
-        return bytes(sk.public_key), bytes(sk)
+        private_key = nacl.public.PrivateKey.generate()
+        return bytes(private_key.public_key), bytes(private_key)
 
     def sign_dilithium(self , data:bytes , signing_key : bytes) -> bytes:
-        with oqs.Signature("Dilithium3") as sig:
-            signature = sig.sign(data)
-            return signature
+        sig = oqs.Signature("Dilithium3")
+        sig.secret_key = signing_key
+        signature = sig.sign(data)
+        return signature
 
-    def verify_dilithium(self , data:bytes , signature : bytes) -> bool:
+    def verify_dilithium(self , data:bytes , signature : bytes , public_key : bytes) -> bool:
         with oqs.Signature("Dilithium3") as sig:
-            return sig.verify(data, signature)
+            return sig.verify(data, signature , public_key=public_key)
 
     def sign_ed25519(self , data:bytes , signing_key : nacl.signing.SigningKey) -> bytes:
-        return signing_key.sign(data)
+        return signing_key.sign(data).signature
 
-    def verify_ed25519(self , data:bytes , signature : bytes) -> bool:
-        verify_key = nacl.signing.VerifyKey(signature)
+    def verify_ed25519(self , data:bytes , signature : bytes , public_key : bytes) -> bool:
+        verify_key = nacl.signing.VerifyKey(public_key)
         try :
-            return bool(verify_key.verify(data))
-        except :
-            raise BadSignatureError("Signature verification failed")
+            verify_key.verify(data , signature)
+            return True
+        except BadSignatureError:
+            return False
 
 
     def kem_encapsulate(self , public_key : bytes) -> tuple[bytes,bytes]:
@@ -90,26 +85,26 @@ class CryptoEngine:
             return ciphertext, shared_secret
 
     def kem_decapsulate(self , ciphertext:bytes , secret_key : bytes) -> bytes:
-        with oqs.KeyEncapsulation("Kyber768") as server:
-            server.secret_key = secret_key
-            shared_secret = server.decap_secret(ciphertext)
-            return shared_secret
+        server = oqs.KeyEncapsulation("Kyber768")
+        server.secret_key = secret_key
+        shared_secret = server.decap_secret(ciphertext)
+        return shared_secret
 
     def dh_exchange(self , my_secret : bytes , their_public : bytes) -> bytes:
         shared_secret = nacl.bindings.crypto_scalarmult(my_secret, their_public)
         return shared_secret
 
-    def encrypt_aeed(self , plaintext : bytes , key : bytes , aad:bytes) -> bytes:
+    def encrypt_aead(self , plaintext : bytes , key : bytes , aad:bytes) -> bytes:
         """
         AES-256-GCM encryption.
         Returns: nonce (12 bytes) || ciphertext || tag (16 bytes)
         """
         aesgcm = AESGCM(key)
-        nonce = os.urandom(16)
-        ct_tag = aesgcm.encrypt(nonce, plaintext)
+        nonce = os.urandom(12)
+        ct_tag = aesgcm.encrypt(nonce, plaintext , aad)
         return nonce + ct_tag
 
-    def decrypt_aeed(self , ciphertext : bytes , key : bytes , aad:bytes) -> bytes:
+    def decrypt_aead(self , ciphertext : bytes , key : bytes , aad:bytes) -> bytes:
         """
         AES-256-GCM decryption.
         Input: nonce (12 bytes) || ciphertext || tag (16 bytes)
@@ -118,28 +113,35 @@ class CryptoEngine:
         nonce = ciphertext[:12]
         ct_tag = ciphertext[12:]
         aesgcm = AESGCM(key)
-        plaintext = aesgcm.decrypt(nonce, ct_tag)
+        plaintext = aesgcm.decrypt(nonce, ct_tag , aad)
         return plaintext
 
 
-    def mint_coin(self , tier:str) -> MintedCoinBundle:
-        if()
+    def mint_coin(self , coin_category:str) -> MintedCoinBundle:
+        if coin_category not in config.VALID_COIN_CATEGORIES:
+            raise InvalidCoinCategoryError(coin_category)
 
+        key_id = str(uuid.uuid4())
+        signing_public_key = None
 
+        if coin_category == "GOLD":
+            pk , sk = generate_keypair_gold_silver()
+            with oqs.Signature("Dilithium3") as signer:
+                signing_public_key = bytes(signer.generate_keypair())
+                dil_sk = signer.export_secret_key()
+            sig = self.sign_dilithium(pk, dil_sk)
+        elif coin_category == "SILVER":
+            pk , sk = generate_keypair_gold_silver()
+            sig = self.sign_ed25519(pk, self._signing_key)
+        else:
+            pk , sk = self.generate_keypair_bronze()
+            sig = self.sign_ed25519(pk, self._signing_key)
 
-def mint_coin(engine: CryptoEngine, coin_category: str) -> MintedCoinBundle:
-    """Generate a full coin: keypair + signature."""
-    if coin_category not in config.VALID_COIN_CATEGORIES:
-        raise InvalidCoinCategoryError(coin_category)
-
-    key_id = str(uuid.uuid4())
-    pk, sk = engine.generate_keypair(coin_category)
-    sig = engine.sign_key(pk, coin_category)
-
-    return MintedCoinBundle(
-        key_id=key_id,
-        coin_category=coin_category,
-        public_key=pk,
-        secret_key=sk,
-        signature=sig,
-    )
+        return MintedCoinBundle(
+            key_id=key_id,
+            coin_category=coin_category,
+            public_key=pk,
+            secret_key=sk,
+            signature=sig,
+            signing_public_key=signing_public_key,
+        )
