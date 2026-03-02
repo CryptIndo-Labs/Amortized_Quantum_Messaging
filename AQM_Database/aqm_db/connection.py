@@ -3,6 +3,7 @@ from AQM_Database.aqm_shared import errors, config
 from AQM_Database.aqm_shared.types import HealthStatus
 
 
+
 def create_vault_client() -> redis.Redis:
     r = redis.Redis(
         host=config.REDIS_HOST,

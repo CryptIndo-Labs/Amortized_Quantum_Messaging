@@ -68,3 +68,9 @@ COIN_SIZE_BYTES = {
     "SILVER": 1_248,    # Kyber-768 pk (1184) + Ed25519 sig (64)
     "BRONZE": 96,       # X25519 pk (32) + Ed25519 sig (64)
 }
+
+CONTACT_THRESHOLDS = {
+    "BESTIE_THRESHOLD_7D"    : 5,
+    "MATE_THRESHOLD_30D"     : 4,
+    "MSG_LOG_RETENTION_DAYS": 30,
+}
