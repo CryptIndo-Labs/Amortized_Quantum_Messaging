@@ -58,10 +58,10 @@ class CryptoEngine:
         return bytes(private_key.public_key), bytes(private_key)
 
     def sign_dilithium(self , data:bytes , signing_key : bytes) -> bytes:
-        with oqs.Signature("Dilithium3") as sig:
-            sig.secret_key = signing_key
-            signature = sig.sign(data)
-            return signature
+        sig = oqs.Signature("Dilithium3")
+        sig.secret_key = signing_key
+        signature = sig.sign(data)
+        return signature
 
     def verify_dilithium(self , data:bytes , signature : bytes , public_key : bytes) -> bool:
         with oqs.Signature("Dilithium3") as sig:
@@ -85,10 +85,10 @@ class CryptoEngine:
             return ciphertext, shared_secret
 
     def kem_decapsulate(self , ciphertext:bytes , secret_key : bytes) -> bytes:
-        with oqs.KeyEncapsulation("Kyber768") as server:
-            server.secret_key = secret_key
-            shared_secret = server.decap_secret(ciphertext)
-            return shared_secret
+        server = oqs.KeyEncapsulation("Kyber768")
+        server.secret_key = secret_key
+        shared_secret = server.decap_secret(ciphertext)
+        return shared_secret
 
     def dh_exchange(self , my_secret : bytes , their_public : bytes) -> bytes:
         shared_secret = nacl.bindings.crypto_scalarmult(my_secret, their_public)
