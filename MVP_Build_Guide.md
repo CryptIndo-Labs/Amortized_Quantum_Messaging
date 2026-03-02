@@ -387,7 +387,7 @@ search_contacts(query: str) -> list[Contact]
 
 **NEW module: `aqm_session/`**
 
-One coin establishes a master secret. The next 100 messages derive AES-256 keys from it using HKDF ratchet. After 100 messages, consume a new coin.
+One coin establishes a master secret. The next 250 messages for Gold Coin, 150 messages for Silver Coin and 75 messages for Bronze Coin derive AES-256 keys from it using HKDF ratchet. After respective messages, consume a new coin.
 
 ```
 aqm_session/
