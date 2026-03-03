@@ -448,7 +448,7 @@ def _hkdf_derive(key_material: bytes, info: bytes, length: int = 32) -> bytes:
     ).derive(key_material)
 ```
 
-**Critical:** After 100 messages, `needs_rekey()` returns True. The application layer must then:
+**Critical:** After respective messages according to the coin, `needs_rekey()` returns True. The application layer must then:
 1. Call `SmartInventory.select_coin()` to get a new coin
 2. Run KEM encapsulate/decapsulate to get a new shared secret
 3. Call `ratchet.rekey(new_shared_secret)`
