@@ -1,4 +1,6 @@
 # AQM MVP Build Guide
+Mode: Pair Programming
+Claude Code acts as a senior engineer pairing with Bonny. Never auto-implement entire files. Instead: explain the approach, write skeleton/pseudocode, let Bonny fill in implementation, review and iterate together. Ask before writing more than 30 lines. Explain every architectural decision.
 ---
 
 ## 0. Project Context
@@ -28,7 +30,10 @@ aqm_shared/errors.py       — exception hierarchy
 bridge.py                  — fetch_and_cache, upload_coins, sync_inventory
 prototype.py               — 4-phase lifecycle demo (terminal output)
 docker-compose.yml         — Redis 7 + PostgreSQL 16
-173 tests                  — all passing
+aqm_shared/crypto_engine.py — ✅ REWRITTEN — real liboqs Kyber-768 + Dilithium-3 (31 tests)
+aqm_contacts/              — ✅ DONE — SQLite contacts DB, auto-priority (28 tests)
+aqm_session/               — ✅ DONE — HKDF ratchet + SQLite session store (35 tests)
+237 tests                  — all passing (no Docker subset: 167)
 ```
 
 ### What Gets DELETED
@@ -39,10 +44,9 @@ chat/                      — ENTIRE folder. Terminal pub/sub chat is throwaway
 
 ### What Gets REWRITTEN (not deleted — rebuilt in place)
 ```
-aqm_shared/crypto_engine.py — Currently uses mock/pseudo PQC. Must use REAL
-                               liboqs for Kyber-768 + Dilithium-3. Zero mocks.
-                               Zero fallbacks to random padding.
-                               See Section 3 for requirements.
+aqm_shared/crypto_engine.py — ✅ DONE. Real liboqs Kyber-768 KEM + Dilithium-3
+                               signing + Ed25519 + X25519 DH + AES-256-GCM AEAD.
+                               Zero mocks. 31 tests passing.
 
 aqm_shared/context_manager.py — Logic is correct but needs real sensor integration
                                  hooks (battery/WiFi/signal APIs) instead of
@@ -51,10 +55,14 @@ aqm_shared/context_manager.py — Logic is correct but needs real sensor integra
 
 ### What Gets BUILT (new)
 ```
-aqm_contacts/              — NEW: Contacts database (SQLite on device)
-aqm_network/               — NEW: Real LAN/WAN networking (WebSocket + HTTP)
+aqm_contacts/              — ✅ DONE: Contacts database (SQLite), auto-priority
+                               from message frequency. 28 tests.
+aqm_session/               — ✅ DONE: Session ratchet (HKDF-SHA256 key derivation,
+                               tier-based window: GOLD=250, SILVER=150, BRONZE=75).
+                               SQLite session store for persistence. 35 tests.
+aqm_network/               — ✅ DONE: Real LAN/WAN networking (WebSocket + HTTP). 26 tests.
+aqm_app/                   — ✅ DONE: Application orchestrator (wires all subsystems). 30 tests.
 aqm_chat_ui/               — NEW: Chat frontend (web-based or desktop)
-aqm_session/               — NEW: Session ratchet (AES-256 key derivation, 100-msg window)
 ```
 
 ---
@@ -175,11 +183,11 @@ Do NOT touch: vault.py, inventory.py, gc.py, coin_inventory.py, bridge.py, api.p
 
 ---
 
-### Phase 1: Real Crypto Engine (Days 2-4)
+### Phase 1: Real Crypto Engine (Days 2-4) — ✅ COMPLETE
 
-**File: `aqm_shared/crypto_engine.py` — REWRITE**
+**File: `aqm_shared/crypto_engine.py` — REWRITTEN**
 
-The current crypto engine has three backends: liboqs+pynacl → pynacl-only → urandom-mock. Delete backends 2 and 3. Only real crypto.
+Real liboqs + PyNaCl + cryptography. Zero mocks. 31 tests passing.
 
 ```python
 # What the rewritten crypto_engine.py must provide:
@@ -303,11 +311,14 @@ class CryptoEngine:
 
 ---
 
-### Phase 2: Contacts Database (Days 5-7)
+Here's the refactored section. Key change: priority is **computed, not manually set**. The DB tracks message frequency and auto-promotes/demotes on every `record_message()` call.
 
-**NEW module: `aqm_contacts/`**
+---
+### Phase 2: Contacts Database (Days 5-7) — ✅ COMPLETE
 
-This does NOT exist yet. The current system hardcodes contact priorities in the demo. The MVP needs a persistent contacts database.
+**Module: `aqm_contacts/`**
+
+SQLite contacts DB with auto-priority from message frequency. 28 tests passing.
 
 ```
 aqm_contacts/
@@ -317,77 +328,156 @@ aqm_contacts/
 └── tests/
     ├── conftest.py
     └── test_contacts.py
-```
 
 **Schema (SQLite):**
 ```sql
 CREATE TABLE contacts (
-    contact_id    TEXT PRIMARY KEY,          -- UUID string
-    display_name  TEXT NOT NULL,
-    priority      TEXT NOT NULL DEFAULT 'STRANGER'
-                  CHECK (priority IN ('BESTIE', 'MATE', 'STRANGER')),
-    public_signing_key  BLOB,               -- their long-term identity key (Dilithium/Ed25519)
-    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_msg_at   TIMESTAMP,
-    msg_count     INTEGER DEFAULT 0,
-    is_blocked    BOOLEAN DEFAULT 0
+    contact_id         TEXT PRIMARY KEY,
+    display_name       TEXT NOT NULL,
+    priority           TEXT NOT NULL DEFAULT 'STRANGER'
+                       CHECK (priority IN ('BESTIE', 'MATE', 'STRANGER')),
+    public_signing_key BLOB,
+    first_seen_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_msg_at        TIMESTAMP,
+    msg_count_total    INTEGER DEFAULT 0,
+    msg_count_7d       INTEGER DEFAULT 0,     -- rolling 7-day message count
+    msg_count_30d      INTEGER DEFAULT 0,     -- rolling 30-day message count
+    priority_locked    BOOLEAN DEFAULT 0,     -- manual override (user pins priority)
+    is_blocked         BOOLEAN DEFAULT 0
+);
+
+CREATE TABLE message_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    contact_id  TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+    timestamp   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_priority ON contacts (priority);
 CREATE INDEX idx_last_msg ON contacts (last_msg_at);
+CREATE INDEX idx_msg_log_ts ON message_log (contact_id, timestamp);
 ```
 
-**Why SQLite, not Redis?**
-Contacts are relational, persistent, and queried by multiple fields. Redis is for hot key caches. SQLite is for structured data that survives reboots.
+**Why `message_log`?** You can't compute "messages in last 7 days" from a single counter. The log stores one row per message. Rolling counts are recalculated from it. Old rows (>30d) get purged periodically.
+
+**Priority thresholds:**
+```
+BESTIE:   msg_count_7d >= 5    (daily-ish contact)
+MATE:     msg_count_30d >= 4   (weekly-ish contact)
+STRANGER: everything else
+```
+
+These are configurable in `aqm_shared/config.py`. The thresholds should be tunable, not hardcoded in the DB logic.
 
 **Class: ContactsDatabase**
 ```
 __init__(db_path: str = "~/.aqm/contacts.db")
     Opens or creates SQLite file. Runs CREATE TABLE IF NOT EXISTS.
 
-add_contact(contact_id, display_name, priority='STRANGER', signing_key=None) -> Contact
-    Idempotent — ON CONFLICT DO UPDATE on display_name/priority.
+add_contact(contact_id, display_name, signing_key=None) -> Contact
+    Always starts as STRANGER. Priority earned, not assigned.
+    Idempotent — ON CONFLICT DO UPDATE on display_name.
 
 remove_contact(contact_id) -> bool
-    Hard delete. Also triggers GarbageCollector + inventory cleanup.
-
-set_priority(contact_id, priority) -> Contact
-    Updates priority. If downgraded (BESTIE→MATE), triggers SmartInventory._trim_excess.
+    Hard delete. Cascades to message_log.
+    Triggers GarbageCollector + inventory cleanup.
 
 get_contact(contact_id) -> Contact | None
 
 get_contacts_by_priority(priority) -> list[Contact]
-    Returns all contacts of a given priority.
 
 get_all_contacts() -> list[Contact]
 
-record_message(contact_id) -> None
-    Increments msg_count, updates last_msg_at.
-    Auto-promotes: if msg_count crosses threshold, suggest priority upgrade.
+# ── Message Tracking ──
+
+record_message(contact_id) -> Contact
+    1. INSERT into message_log
+    2. Recalculate rolling counts (7d, 30d)
+    3. Call _recompute_priority(contact_id)
+    4. Return updated Contact (caller sees new priority if it changed)
+
+_recompute_priority(contact_id) -> str | None
+    If priority_locked: return None (user pinned it, don't touch)
+
+    old_priority = current priority
+    new_priority = BESTIE if msg_count_7d >= BESTIE_THRESHOLD
+                   MATE   if msg_count_30d >= MATE_THRESHOLD
+                   STRANGER otherwise
+
+    If changed:
+      UPDATE contacts SET priority = new_priority
+      If DOWNGRADED (BESTIE→MATE or MATE→STRANGER):
+        trigger SmartInventory._trim_excess
+      If UPGRADED (STRANGER→MATE or MATE→BESTIE):
+        trigger bridge.fetch_and_cache with new budget caps
+      Return new_priority
+    Return None (no change)
+
+refresh_rolling_counts() -> int
+    Batch recalculate msg_count_7d and msg_count_30d for ALL contacts.
+    DELETE FROM message_log WHERE timestamp < NOW() - 30 days.
+    Call _recompute_priority for each contact.
+    Returns number of priority changes.
+    Run this on app startup + daily scheduler.
+
+# ── Manual Override ──
+
+lock_priority(contact_id, priority) -> Contact
+    Sets priority_locked = True, forces specific priority.
+    Use case: user manually pins someone as BESTIE regardless of frequency.
+
+unlock_priority(contact_id) -> Contact
+    Sets priority_locked = False. Next record_message() will recompute.
+
+# ── Queries ──
 
 get_inactive_contacts(days: int = 30) -> list[Contact]
-    For garbage collection — contacts with last_msg_at older than threshold.
+    Contacts with last_msg_at older than threshold OR last_msg_at IS NULL.
 
 block_contact(contact_id) -> None
-    Sets is_blocked=True. Triggers inventory cleanup for this contact.
+    Sets is_blocked = True. Triggers inventory cleanup.
 
 search_contacts(query: str) -> list[Contact]
     LIKE search on display_name.
 ```
 
-**Integration points:**
-- `bridge.fetch_and_cache()` reads priority from ContactsDB to determine budget caps
-- `GarbageCollector` uses `get_inactive_contacts()` to find cleanup candidates
-- Chat UI displays contact list from ContactsDB
-- Adding a new contact triggers initial key fetch from server
+**Rolling count query (inside `_recompute_priority`):**
+```sql
+UPDATE contacts SET
+    msg_count_7d  = (SELECT COUNT(*) FROM message_log
+                     WHERE contact_id = ? AND timestamp > datetime('now', '-7 days')),
+    msg_count_30d = (SELECT COUNT(*) FROM message_log
+                     WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
+WHERE contact_id = ?;
+```
 
----
+**Priority change side effects (critical):**
 
-### Phase 3: Session Ratchet (Days 8-10)
+| Transition | What happens |
+|---|---|
+| STRANGER → MATE | `fetch_and_cache(contact, MATE budget)` — fetch 6S+4B from server |
+| MATE → BESTIE | `fetch_and_cache(contact, BESTIE budget)` — fetch 5G+4S+1B from server |
+| BESTIE → MATE | `inventory._trim_excess()` — evict Gold keys, free 18KB |
+| MATE → STRANGER | `inventory._trim_excess()` — evict all cached keys |
 
-**NEW module: `aqm_session/`**
+The DB doesn't call these directly — `_recompute_priority` returns the old and new priority. The **orchestrator** checks for changes and triggers the inventory/bridge side effects. Keep the DB layer pure.
 
-One coin establishes a master secret. The next 250 messages for Gold Coin, 150 messages for Silver Coin and 75 messages for Bronze Coin derive AES-256 keys from it using HKDF ratchet. After respective messages, consume a new coin.
+**Config additions (`aqm_shared/config.py`):**
+```python
+BESTIE_THRESHOLD_7D  = 5    # 5+ messages in 7 days → BESTIE
+MATE_THRESHOLD_30D   = 4    # 4+ messages in 30 days → MATE
+MSG_LOG_RETENTION_DAYS = 30  # purge message_log rows older than this
+```
+
+Feed this updated section to Claude Code. Start with schema + `__init__` + `add_contact` + `record_message` + `_recompute_priority`. Those four are the core — everything else is CRUD.
+
+### Phase 3: Session Ratchet (Days 8-10) — ✅ COMPLETE
+
+**Module: `aqm_session/`**
+
+One coin establishes a master secret. Messages derive AES-256 keys via HKDF ratchet.
+Enhanced from spec: tier-based dynamic limits (GOLD=250, SILVER=150, BRONZE=75) instead
+of fixed 100-msg window. Rekey changes tier + limit dynamically. SQLite session store
+for persistence. 35 tests passing.
 
 ```
 aqm_session/
@@ -448,7 +538,7 @@ def _hkdf_derive(key_material: bytes, info: bytes, length: int = 32) -> bytes:
     ).derive(key_material)
 ```
 
-**Critical:** After respective messages according to the coin, `needs_rekey()` returns True. The application layer must then:
+**Critical:** After 100 messages, `needs_rekey()` returns True. The application layer must then:
 1. Call `SmartInventory.select_coin()` to get a new coin
 2. Run KEM encapsulate/decapsulate to get a new shared secret
 3. Call `ratchet.rekey(new_shared_secret)`
@@ -456,21 +546,24 @@ def _hkdf_derive(key_material: bytes, info: bytes, length: int = 32) -> bytes:
 
 ---
 
-### Phase 4: Network Layer (Days 11-15)
+### Phase 4: Network Layer (Days 11-15) — ✅ COMPLETE
 
-**NEW module: `aqm_network/`**
+**Module: `aqm_network/`**
 
-Replace Redis pub/sub with real WebSocket networking. Messages travel over LAN or WAN.
+Real WebSocket networking. Messages travel over LAN or WAN. 26 tests passing.
 
 ```
 aqm_network/
 ├── __init__.py
 ├── relay_server.py        — WebSocket relay hub (server-side)
 ├── client.py              — WebSocket client (device-side)
-├── protocol.py            — Message framing, serialization
+├── protocol.py            — Message framing, serialization, size guard
 └── tests/
-    ├── conftest.py
-    └── test_network.py
+    ├── __init__.py
+    ├── conftest.py        — pytest_asyncio fixture for live server
+    ├── test_protocol.py   — 12 tests (frame/parse/roundtrip/validation)
+    ├── test_network.py    — 11 tests (auth, routing, mailbox, Client integration)
+    └── test_relay_unit.py — 3 tests (store_parcel, mailbox init)
 ```
 
 **Architecture:**
@@ -654,9 +747,21 @@ Good for: polished demo, richer interactivity, familiar stack.
 
 ---
 
-### Phase 6: Application Orchestrator (Days 23-25)
+### Phase 6: Application Orchestrator (Days 23-25) — ✅ COMPLETE
 
-**File: `aqm_app/orchestrator.py`**
+**Module: `aqm_app/`**
+
+Application orchestrator that wires all subsystems together. 30 tests passing.
+
+```
+aqm_app/
+├── __init__.py
+├── orchestrator.py            — AQMApp class (mint, send, receive, contacts)
+└── tests/
+    ├── __init__.py
+    ├── conftest.py            — mock subsystem fixtures
+    └── test_orchestrator.py   — 30 tests (init, mint, send, receive, ratchet, cap_tier)
+```
 
 This is the brain. It wires everything together.
 
@@ -719,19 +824,18 @@ class AQMApp:
 ## 4. Implementation Order
 
 ```
-Week 1 (Days 1-7):     Foundation
-  Day 1:    Delete chat/, clean up demo.py
-  Day 2-4:  Rewrite crypto_engine.py with real liboqs
-  Day 5-7:  Build aqm_contacts/ (SQLite contacts database)
+Week 1 (Days 1-7):     Foundation — ✅ COMPLETE
+  Day 1:    Delete chat/, clean up demo.py                    ✅
+  Day 2-4:  Rewrite crypto_engine.py with real liboqs         ✅ 31 tests
+  Day 5-7:  Build aqm_contacts/ (SQLite contacts database)    ✅ 28 tests
 
-Week 2 (Days 8-15):    Core Infrastructure
-  Day 8-10:  Build aqm_session/ (HKDF ratchet, 100-msg window)
-  Day 11-13: Build aqm_network/relay_server.py (WebSocket hub)
-  Day 14-15: Build aqm_network/client.py (WebSocket client)
+Week 2 (Days 8-15):    Core Infrastructure — ✅ COMPLETE
+  Day 8-10:  Build aqm_session/ (HKDF ratchet, tier-based)   ✅ 35 tests
+  Day 11-13: Build aqm_network/ (protocol + relay + client)  ✅ 26 tests
 
 Week 3 (Days 16-22):   Frontend + Integration
-  Day 16-18: Build Flask + HTMX chat UI (contact list + chat window)
-  Day 19-20: Build orchestrator.py (wires everything)
+  Day 16-18: Build orchestrator.py (wires everything)           ✅ 30 tests
+  Day 19-20: Build Flask + HTMX chat UI (contact list + chat window)
   Day 21-22: WebSocket integration (live messages in UI)
 
 Week 4 (Days 23-28):   Polish + Demo
@@ -752,7 +856,7 @@ AQM_Database/
 │   ├── config.py                  ✅ keep
 │   ├── types.py                   ✅ keep + extend with Parcel, Contact
 │   ├── errors.py                  ✅ keep + extend
-│   ├── crypto_engine.py           🔄 REWRITE — real liboqs, zero mocks
+│   ├── crypto_engine.py           ✅ REWRITTEN — real liboqs, zero mocks
 │   ├── context_manager.py         🔄 UPDATE — real sensor hooks
 │   └── tests/
 │
@@ -774,7 +878,7 @@ AQM_Database/
 │   │   └── 002_create_mailbox.sql         🆕 NEW
 │   └── tests/                     ✅ + new relay tests
 │
-├── aqm_contacts/                  # 🆕 NEW — Contact management
+├── aqm_contacts/                  # ✅ DONE — Contact management
 │   ├── __init__.py
 │   ├── contacts_db.py
 │   ├── models.py
@@ -782,7 +886,7 @@ AQM_Database/
 │       ├── conftest.py
 │       └── test_contacts.py
 │
-├── aqm_session/                   # 🆕 NEW — Session ratchet
+├── aqm_session/                   # ✅ DONE — Session ratchet
 │   ├── __init__.py
 │   ├── ratchet.py
 │   ├── session_store.py
@@ -790,14 +894,16 @@ AQM_Database/
 │       ├── conftest.py
 │       └── test_ratchet.py
 │
-├── aqm_network/                   # 🆕 NEW — Real networking
+├── aqm_network/                   # ✅ DONE — Real networking (26 tests)
 │   ├── __init__.py
-│   ├── relay_server.py
-│   ├── client.py
-│   ├── protocol.py
+│   ├── protocol.py               ✅ frame/parse, base64 bytes, size guard
+│   ├── relay_server.py           ✅ WebSocket hub, auth, routing, mailbox
+│   ├── client.py                 ✅ WebSocket client, background listener
 │   └── tests/
 │       ├── conftest.py
-│       └── test_network.py
+│       ├── test_protocol.py
+│       ├── test_network.py
+│       └── test_relay_unit.py
 │
 ├── aqm_chat_ui/                   # 🆕 NEW — Web-based chat frontend
 │   ├── app.py                     # Flask app
@@ -810,9 +916,13 @@ AQM_Database/
 │   │   └── app.js
 │   └── tests/
 │
-├── aqm_app/                       # 🆕 NEW — Application orchestrator
+├── aqm_app/                       # ✅ DONE — Application orchestrator (30 tests)
 │   ├── __init__.py
-│   └── orchestrator.py
+│   ├── orchestrator.py
+│   └── tests/
+│       ├── __init__.py
+│       ├── conftest.py
+│       └── test_orchestrator.py
 │
 ├── bridge.py                      ✅ keep
 ├── prototype.py                   ✅ keep (still useful for headless demo)
@@ -825,23 +935,27 @@ AQM_Database/
 ## 6. Testing Strategy
 
 ```
-Target: 250+ tests total
+Target: 280+ tests total
 
-aqm_shared/tests/         ~25 tests  (real crypto roundtrips, context decisions)
-aqm_db/tests/             ~70 tests  (existing, fakeredis)
-aqm_server/tests/         ~40 tests  (existing + mailbox + relay)
-aqm_contacts/tests/       ~15 tests  (SQLite CRUD, priority changes, search)
-aqm_session/tests/        ~15 tests  (ratchet derivation, 100-msg boundary, rekey)
-aqm_network/tests/        ~20 tests  (WebSocket connect, send, receive, offline mailbox)
+aqm_shared/tests/         48 tests   ✅ (crypto=31, context=17) — no Docker
+aqm_db/tests/             70 tests   ✅ (existing, fakeredis)
+aqm_server/tests/         37 tests   ✅ (existing — needs Docker)
+aqm_contacts/tests/       28 tests   ✅ (SQLite CRUD, auto-priority, search) — no Docker
+aqm_session/tests/        35 tests   ✅ (derivation, tiers, state, store, scenarios) — no Docker
+aqm_network/tests/        26 tests   ✅ (protocol=12, integration=11, unit=3) — no Docker
+aqm_app/tests/            30 tests   ✅ (init, mint, send, receive, ratchet, cap_tier) — no Docker
 aqm_chat_ui/tests/        ~10 tests  (Flask routes, template rendering)
 integration/              ~15 tests  (full lifecycle: mint → fetch → send → receive → burn)
+
+Current total: 274 passing (167 no-Docker + 107 Docker)
 
 Test commands:
   pytest AQM_Database/ -v                          # all
   pytest AQM_Database/aqm_shared/tests/ -v         # crypto + context (no Docker)
   pytest AQM_Database/aqm_contacts/tests/ -v       # contacts (no Docker)
   pytest AQM_Database/aqm_session/tests/ -v        # ratchet (no Docker)
-  pytest AQM_Database/aqm_network/tests/ -v        # network (needs Docker)
+  pytest AQM_Database/aqm_network/tests/ -v        # network (no Docker)
+  pytest AQM_Database/aqm_app/tests/ -v            # orchestrator (no Docker)
   pytest AQM_Database/aqm_server/tests/ -v         # server (needs Docker)
 ```
 

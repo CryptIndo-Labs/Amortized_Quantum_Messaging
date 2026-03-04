@@ -35,3 +35,7 @@ Thumbs.db
 # C++ build artifacts
 codes/build/
 codes/bin/
+
+MVP_Build_Guide.md.md
+codes/
+demo.py
