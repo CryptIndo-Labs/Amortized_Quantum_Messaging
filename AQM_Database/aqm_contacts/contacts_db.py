@@ -10,7 +10,7 @@ class ContactsDatabase:
     def __init__(self, db_path: str = "~/.aqm/contacts.db"):
         db_path = os.path.expanduser(db_path)
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.connection = sqlite3.connect(db_path)
+        self.connection = sqlite3.connect(db_path, check_same_thread=False)
         self.connection.execute('PRAGMA foreign_keys = ON')
         self.cursor = self.connection.cursor()
 

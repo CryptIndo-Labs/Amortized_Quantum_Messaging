@@ -107,7 +107,12 @@ def preflight():
     # Crypto backend summary
     from AQM_Database.aqm_shared.crypto_engine import CryptoEngine
     engine = CryptoEngine()
-    info(f"Crypto backend: {BOLD}{engine.backend}{RESET}")
+    try:
+        import oqs
+        backend_name = "liboqs (Kyber-768 + Dilithium-3)"
+    except ImportError:
+            backend_name = "pynacl fallback (X25519 mock)"
+    info(f"Crypto backend: {BOLD}{backend_name}{RESET}")
 
     print()
     all_ok = all(results)
