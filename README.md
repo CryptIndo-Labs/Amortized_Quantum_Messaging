@@ -1,4 +1,7 @@
 # ReadMe.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
 AQM Database is the **data persistence layer** for the Amortized Quantum Messaging (AQM) system. It implements a complete post-quantum key lifecycle across three database tiers:
