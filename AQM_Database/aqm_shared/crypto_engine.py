@@ -41,7 +41,7 @@ class MintedCoinBundle:
 
 
 def generate_keypair_gold_silver() -> tuple[bytes, bytes]:
-    with oqs.KeyEncapsulation("ML-KEM-768") as kem:
+    with oqs.KeyEncapsulation("Kyber768") as kem:
         public_key = kem.generate_keypair()
         secret_key = kem.export_secret_key()
         return bytes(public_key), bytes(secret_key)
@@ -58,13 +58,13 @@ class CryptoEngine:
         return bytes(private_key.public_key), bytes(private_key)
 
     def sign_dilithium(self , data:bytes , signing_key : bytes) -> bytes:
-        sig = oqs.Signature("ML-DSA-65")
+        sig = oqs.Signature("Dilithium3")
         sig.secret_key = signing_key
         signature = sig.sign(data)
         return signature
 
     def verify_dilithium(self , data:bytes , signature : bytes , public_key : bytes) -> bool:
-        with oqs.Signature("ML-DSA-65") as sig:
+        with oqs.Signature("Dilithium3") as sig:
             return sig.verify(data, signature , public_key=public_key)
 
     def sign_ed25519(self , data:bytes , signing_key : nacl.signing.SigningKey) -> bytes:
@@ -80,12 +80,12 @@ class CryptoEngine:
 
 
     def kem_encapsulate(self , public_key : bytes) -> tuple[bytes,bytes]:
-        with oqs.KeyEncapsulation("ML-KEM-768") as client:
+        with oqs.KeyEncapsulation("Kyber768") as client:
             ciphertext, shared_secret = client.encap_secret(public_key)
             return ciphertext, shared_secret
 
     def kem_decapsulate(self , ciphertext:bytes , secret_key : bytes) -> bytes:
-        server = oqs.KeyEncapsulation("ML-KEM-768")
+        server = oqs.KeyEncapsulation("Kyber768")
         server.secret_key = secret_key
         shared_secret = server.decap_secret(ciphertext)
         return shared_secret
@@ -126,7 +126,7 @@ class CryptoEngine:
 
         if coin_category == "GOLD":
             pk , sk = generate_keypair_gold_silver()
-            with oqs.Signature("ML-DSA-65") as signer:
+            with oqs.Signature("Dilithium3") as signer:
                 signing_public_key = bytes(signer.generate_keypair())
                 dil_sk = signer.export_secret_key()
             sig = self.sign_dilithium(pk, dil_sk)

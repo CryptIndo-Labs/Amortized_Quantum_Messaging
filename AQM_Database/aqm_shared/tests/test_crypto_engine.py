@@ -74,7 +74,7 @@ class TestDilithiumSigning:
     def dilithium_keys(self):
         """Generate a Dilithium-3 keypair for signing tests."""
         import oqs
-        with oqs.Signature("ML-DSA-65") as sig:
+        with oqs.Signature("Dilithium3") as sig:
             pk = bytes(sig.generate_keypair())
             sk = sig.export_secret_key()
         return pk, sk
