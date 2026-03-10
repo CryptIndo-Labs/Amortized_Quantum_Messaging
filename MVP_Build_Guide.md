@@ -62,7 +62,7 @@ aqm_session/               — ✅ DONE: Session ratchet (HKDF-SHA256 key deriva
                                SQLite session store for persistence. 35 tests.
 aqm_network/               — ✅ DONE: Real LAN/WAN networking (WebSocket + HTTP). 26 tests.
 aqm_app/                   — ✅ DONE: Application orchestrator (wires all subsystems). 30 tests.
-aqm_chat_ui/               — NEW: Chat frontend (web-based or desktop)
+flask_app/                 — ✅ DONE: Flask chat UI (SSE, per-user instance)
 ```
 
 ---
@@ -137,7 +137,7 @@ aqm_chat_ui/               — NEW: Chat frontend (web-based or desktop)
 | **Classical crypto** | `PyNaCl` (already installed) | X25519 DH, Ed25519 signing, NaCl SecretBox AEAD |
 | **Session ratchet** | `cryptography` (pip) | HKDF-SHA256 for key derivation chain |
 | **Chat networking** | `websockets` (pip) | Async WebSocket for real-time message relay (LAN/WAN) |
-| **Chat frontend** | React (Vite) or Flask + HTMX | Web-based chat UI accessible from browser |
+| **Chat frontend** | Flask + SSE | Web-based chat UI accessible from browser |
 | **Message serialization** | `msgpack` or JSON | Compact binary or standard JSON for parcel format |
 | **Device sensor mock** | `psutil` (pip) | Real battery % on laptops, mock signal for dev |
 
@@ -673,77 +673,34 @@ CREATE INDEX idx_mailbox_recipient
 
 ---
 
-### Phase 5: Chat Frontend (Days 16-22)
+### Phase 5: Chat Frontend (Days 16-22) — ✅ COMPLETE
 
-**NEW module: `aqm_chat_ui/`**
+**Module: `flask_app/`**
 
-Two options — pick one:
+Flask + SSE web UI with real-time messaging. Per-user Flask instances communicate
+via HTTP POST. Device context simulated with random values every 8 seconds.
 
-**Option A: Flask + HTMX (simpler, Python-only)**
 ```
-aqm_chat_ui/
-├── app.py                 — Flask app
-├── templates/
-│   ├── base.html
-│   ├── chat.html          — main chat view
-│   ├── contacts.html      — contact list + management
-│   └── settings.html      — priority management, device info
-├── static/
-│   ├── style.css
-│   └── app.js             — WebSocket client JS, HTMX config
-└── tests/
+flask_app/
+├── __init__.py
+├── app.py                 — Flask server (per-user instance, ~740 lines)
+├── aqm_bridge.py          — Async-to-sync bridge (run_async helper)
+└── templates/
+    └── index.html         — SPA UI (SSE, real-time updates, WhatsApp-inspired)
 ```
-Good for: rapid prototyping, demo day, single-page feel with HTMX live updates.
 
-**Option B: React + Vite (richer, separate frontend)**
-```
-aqm_chat_ui/
-├── src/
-│   ├── App.jsx
-│   ├── components/
-│   │   ├── ChatWindow.jsx
-│   │   ├── MessageBubble.jsx
-│   │   ├── ContactList.jsx
-│   │   ├── ContactCard.jsx
-│   │   ├── CoinStatus.jsx     — shows [G:5 S:4 B:1] remaining
-│   │   ├── DeviceContext.jsx   — shows battery/signal/tier
-│   │   └── TierBadge.jsx      — gold/silver/bronze pill badge
-│   ├── hooks/
-│   │   └── useWebSocket.js
-│   └── api/
-│       └── aqm.js             — REST calls to FastAPI backend
-├── package.json
-└── vite.config.js
-```
-Good for: polished demo, richer interactivity, familiar stack.
-
-**Recommendation: Option A (Flask + HTMX)** for MVP speed. The terminal demo already works — you need a skin, not a SPA framework.
-
-**Core UI features:**
-```
-1. Contact list sidebar
-   - Shows all contacts grouped by priority (Bestie/Mate/Stranger)
-   - Add new contact (UUID + display name)
-   - Change priority (dropdown)
-   - Coin inventory indicator per contact
-
-2. Chat window
-   - Message bubbles (sent/received)
-   - Each message shows: tier badge (gold/silver/bronze), timestamp
-   - Coin counter in header: [G:5 S:4 B:1]
-   - Device context indicator: battery %, WiFi status, selected tier
-
-3. Real-time updates
-   - WebSocket connection to relay server
-   - Incoming messages appear instantly
-   - Coin counter decrements on send
-   - Tier badge changes color based on context shifts
-
-4. Status bar
-   - Connection status (connected/disconnected/reconnecting)
-   - Current device context (battery/WiFi/signal)
-   - Auto-selected tier with explanation
-```
+**Implemented features:**
+- Contact list with per-contact coin inventory (GOLD/SILVER/BRONZE counts)
+- Chat window with tier-colored message bubbles
+- Real-time SSE updates (no polling)
+- Session tier + next rekey tier display
+- Ratchet progress bar (messages remaining before rekey)
+- Vault burn counter (perfect forward secrecy tracking)
+- Priority promotion progress bars (toward MATE/BESTIE thresholds)
+- Device context panel (battery %, WiFi, signal dBm, ideal tier, capped tier)
+- Multi-user support (alice:5000, bob:5001, charlie:5002)
+- Background inventory sync (retries every 10s if contact has 0 coins)
+- Priority lock/unlock per contact
 
 ---
 
@@ -818,6 +775,11 @@ class AQMApp:
     async def get_device_context(self) -> DeviceContext:
         """Read real battery/WiFi/signal from psutil or system APIs."""
 ```
+Vault expects split blobs — encrypt_aead() returns nonce||ciphertext||tag as one blob, but vault.store_key() wants encrypted_blob, encryption_iv, auth_tag as separate params. The guide doesn't mention this split.
+- Tier capping — the guide says "get device context → select tier" but doesn't explain that you need to cap the ideal tier against TIER_CEILING[contact.priority]. A STRANGER can't use GOLD even if the device context says GOLD.
+- kem_encapsulate return order — returns (ciphertext, shared_secret), not (shared_secret, ciphertext). The guide's Phase 1 documents this but Phase 6 doesn't cross-reference it.
+- Dependency injection — the guide hardcodes CoinInventoryServer(pool) in __init__ (which doesn't belong in the client-side orchestrator) and doesn't show how to make it testable.
+- Framing — no Parcel class exists. You use frame_message("PARCEL", {...}) / parse_message(raw) from protocol.py. The guide's Phase 6 still references Parcel as a dataclass.
 
 ---
 
@@ -833,10 +795,10 @@ Week 2 (Days 8-15):    Core Infrastructure — ✅ COMPLETE
   Day 8-10:  Build aqm_session/ (HKDF ratchet, tier-based)   ✅ 35 tests
   Day 11-13: Build aqm_network/ (protocol + relay + client)  ✅ 26 tests
 
-Week 3 (Days 16-22):   Frontend + Integration
+Week 3 (Days 16-22):   Frontend + Integration — ✅ COMPLETE
   Day 16-18: Build orchestrator.py (wires everything)           ✅ 30 tests
-  Day 19-20: Build Flask + HTMX chat UI (contact list + chat window)
-  Day 21-22: WebSocket integration (live messages in UI)
+  Day 19-20: Build Flask chat UI (contact list + chat window)   ✅
+  Day 21-22: SSE integration (live messages in UI)              ✅
 
 Week 4 (Days 23-28):   Polish + Demo
   Day 23-24: Multi-scenario demo (WiFi → 2G → emergency transitions in UI)
@@ -905,16 +867,12 @@ AQM_Database/
 │       ├── test_network.py
 │       └── test_relay_unit.py
 │
-├── aqm_chat_ui/                   # 🆕 NEW — Web-based chat frontend
-│   ├── app.py                     # Flask app
-│   ├── templates/
-│   │   ├── base.html
-│   │   ├── chat.html
-│   │   └── contacts.html
-│   ├── static/
-│   │   ├── style.css
-│   │   └── app.js
-│   └── tests/
+├── flask_app/                     # ✅ DONE — Web-based chat frontend
+│   ├── __init__.py
+│   ├── app.py                     # Flask server (per-user instance)
+│   ├── aqm_bridge.py              # Async-to-sync bridge
+│   └── templates/
+│       └── index.html             # SPA UI (SSE, real-time)
 │
 ├── aqm_app/                       # ✅ DONE — Application orchestrator (30 tests)
 │   ├── __init__.py
@@ -944,7 +902,7 @@ aqm_contacts/tests/       28 tests   ✅ (SQLite CRUD, auto-priority, search) �
 aqm_session/tests/        35 tests   ✅ (derivation, tiers, state, store, scenarios) — no Docker
 aqm_network/tests/        26 tests   ✅ (protocol=12, integration=11, unit=3) — no Docker
 aqm_app/tests/            30 tests   ✅ (init, mint, send, receive, ratchet, cap_tier) — no Docker
-aqm_chat_ui/tests/        ~10 tests  (Flask routes, template rendering)
+flask_app/                — manual testing (Flask UI, SSE, multi-user)
 integration/              ~15 tests  (full lifecycle: mint → fetch → send → receive → burn)
 
 Current total: 274 passing (167 no-Docker + 107 Docker)
@@ -1020,5 +978,5 @@ PAIR PROGRAMMING MODE — ENFORCED
 | Send encrypted message | `aqm_app/orchestrator.py` | `app.send_message()` |
 | Receive + decrypt message | `aqm_app/orchestrator.py` | `app.receive_message()` |
 | Route parcel between users | `aqm_network/relay_server.py` | `relay.route_parcel()` |
-| Display chat UI | `aqm_chat_ui/app.py` | Flask routes |
+| Display chat UI | `flask_app/app.py` | Flask routes |
 | Read battery/WiFi | `aqm_shared/context_manager.py` | `context.get_device_context()` |

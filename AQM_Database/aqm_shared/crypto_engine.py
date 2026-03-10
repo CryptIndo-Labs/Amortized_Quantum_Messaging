@@ -41,7 +41,7 @@ class MintedCoinBundle:
 
 
 def generate_keypair_gold_silver() -> tuple[bytes, bytes]:
-    with oqs.KeyEncapsulation("Kyber768") as kem:
+    with oqs.KeyEncapsulation("ML-KEM-768") as kem:
         public_key = kem.generate_keypair()
         secret_key = kem.export_secret_key()
         return bytes(public_key), bytes(secret_key)
@@ -58,13 +58,13 @@ class CryptoEngine:
         return bytes(private_key.public_key), bytes(private_key)
 
     def sign_dilithium(self , data:bytes , signing_key : bytes) -> bytes:
-        sig = oqs.Signature("Dilithium3")
+        sig = oqs.Signature("ML-DSA-65")
         sig.secret_key = signing_key
         signature = sig.sign(data)
         return signature
 
     def verify_dilithium(self , data:bytes , signature : bytes , public_key : bytes) -> bool:
-        with oqs.Signature("Dilithium3") as sig:
+        with oqs.Signature("ML-DSA-65") as sig:
             return sig.verify(data, signature , public_key=public_key)
 
     def sign_ed25519(self , data:bytes , signing_key : nacl.signing.SigningKey) -> bytes:
@@ -79,16 +79,29 @@ class CryptoEngine:
             return False
 
 
-    def kem_encapsulate(self , public_key : bytes) -> tuple[bytes,bytes]:
-        with oqs.KeyEncapsulation("Kyber768") as client:
-            ciphertext, shared_secret = client.encap_secret(public_key)
+    def kem_encapsulate(self, public_key: bytes, tier: str = "GOLD") -> tuple[bytes, bytes]:
+        if tier == "BRONZE":
+            # X25519 ECDH — generate ephemeral keypair, send ephemeral pubkey as ciphertext
+            ephemeral_sk  = nacl.public.PrivateKey.generate()
+            peer_pk       = nacl.public.PublicKey(public_key)
+            shared_secret = nacl.bindings.crypto_scalarmult(bytes(ephemeral_sk), bytes(peer_pk))
+            ciphertext    = bytes(ephemeral_sk.public_key)   # 32 bytes
             return ciphertext, shared_secret
+        else:
+            with oqs.KeyEncapsulation("ML-KEM-768") as client:
+                ciphertext, shared_secret = client.encap_secret(public_key)
+                return ciphertext, shared_secret
 
-    def kem_decapsulate(self , ciphertext:bytes , secret_key : bytes) -> bytes:
-        server = oqs.KeyEncapsulation("Kyber768")
-        server.secret_key = secret_key
-        shared_secret = server.decap_secret(ciphertext)
-        return shared_secret
+    def kem_decapsulate(self, ciphertext: bytes, secret_key: bytes, tier: str = "GOLD") -> bytes:
+        if tier == "BRONZE":
+            # X25519 ECDH — ciphertext is sender's ephemeral pubkey
+            shared_secret = nacl.bindings.crypto_scalarmult(secret_key, ciphertext)
+            return shared_secret
+        else:
+            server = oqs.KeyEncapsulation("ML-KEM-768")
+            server.secret_key = secret_key
+            shared_secret = server.decap_secret(ciphertext)
+            return shared_secret
 
     def dh_exchange(self , my_secret : bytes , their_public : bytes) -> bytes:
         shared_secret = nacl.bindings.crypto_scalarmult(my_secret, their_public)
@@ -126,7 +139,7 @@ class CryptoEngine:
 
         if coin_category == "GOLD":
             pk , sk = generate_keypair_gold_silver()
-            with oqs.Signature("Dilithium3") as signer:
+            with oqs.Signature("ML-DSA-65") as signer:
                 signing_public_key = bytes(signer.generate_keypair())
                 dil_sk = signer.export_secret_key()
             sig = self.sign_dilithium(pk, dil_sk)
