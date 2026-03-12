@@ -1,5 +1,6 @@
 # PostgreSQL Connection
-PG_DSN = "postgresql://aqm_user:aqm_dev_password@localhost:5433/aqm"
+import os as _os
+PG_DSN = _os.environ.get("PG_DSN", "postgresql://aqm_user:aqm_dev_password@localhost:5433/aqm")
 
 # Connection Pool
 PG_POOL_MIN_SIZE = 5

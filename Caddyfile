@@ -1,0 +1,15 @@
+# Replace aqm.example.com with your actual domain.
+# Point DNS A records for alice/bob/charlie subdomains to your VPS IP.
+# Caddy auto-provisions Let's Encrypt TLS certificates.
+
+alice.aqm.example.com {
+    reverse_proxy alice:5000
+}
+
+bob.aqm.example.com {
+    reverse_proxy bob:5001
+}
+
+charlie.aqm.example.com {
+    reverse_proxy charlie:5002
+}

@@ -60,7 +60,9 @@ AQM_Database/
 ├── flask_app/                     # Web UI (Flask + SSE)
 │   ├── app.py                     # Per-user Flask server
 │   ├── aqm_bridge.py              # Async-to-sync helper
-│   └── templates/index.html       # SPA UI (real-time updates)
+│   └── templates/
+│       ├── index.html             # SPA dashboard (real-time updates)
+│       └── login.html             # Login page
 ├── aqm_shared/                    # Shared types, errors, config, crypto
 │   ├── config.py                  # Constants, budget caps, thresholds
 │   ├── crypto_engine.py           # ML-KEM-768, ML-DSA-65, X25519, AEAD
@@ -158,26 +160,47 @@ uvicorn AQM_Database.aqm_server.api:app --host 0.0.0.0 --port 8000
 # Terminal 2 — Alice
 conda activate aqm-db
 python -m AQM_Database.flask_app.app --user alice --port 5000 \
-  --contacts bob charlie --contact-ports 5001 5002
+  --contacts bob charlie --contact-ports 5001 5002 --password mypassword
 
 # Terminal 3 — Bob
 conda activate aqm-db
 python -m AQM_Database.flask_app.app --user bob --port 5001 \
-  --contacts alice charlie --contact-ports 5000 5002
+  --contacts alice charlie --contact-ports 5000 5002 --password mypassword
 
 # Terminal 4 — Charlie
 conda activate aqm-db
 python -m AQM_Database.flask_app.app --user charlie --port 5002 \
-  --contacts alice bob --contact-ports 5000 5001
+  --contacts alice bob --contact-ports 5000 5001 --password mypassword
 ```
 
-**Step 4 — Open in browser:**
+**Step 4 — Open in browser and log in:**
 
-| User    | URL                    |
-|---------|------------------------|
-| Alice   | http://localhost:5000  |
-| Bob     | http://localhost:5001  |
-| Charlie | http://localhost:5002  |
+| User    | URL                    | Password     |
+|---------|------------------------|--------------|
+| Alice   | http://localhost:5000  | `mypassword` |
+| Bob     | http://localhost:5001  | `mypassword` |
+| Charlie | http://localhost:5002  | `mypassword` |
+
+Each URL shows a login page. Enter the password to access the dashboard.
+
+Default password (if `--password` is not set): `aqm-demo-2026`. Can also be set via `AQM_PASSWORD` env var.
+
+### Verifying the Demo
+
+Once logged in, verify the following:
+
+1. **Login gate** — visiting any URL without logging in redirects to `/login`
+2. **Contacts panel** — left sidebar shows all configured contacts with priority badges
+3. **Send a message** — select a contact, type a message, press Send. The message appears in both sender and receiver dashboards in real time (SSE)
+4. **Tier indicator** — the top-right dot changes color based on the active session tier:
+   - Green dot + "POST-QUANTUM SECURE" → GOLD (ML-KEM-768)
+   - Yellow dot + "HYBRID SECURE" → SILVER
+   - Red dot + "CLASSICAL SECURE" → BRONZE
+5. **Ratchet progress** — the ratchet bar fills as messages are sent; rekey triggers automatically at the limit
+6. **Device context** — battery/wifi/signal values update every 20 seconds (simulated), affecting tier selection
+7. **Background minting** — when device is in ideal state and vault is low, new coins are minted automatically. The minting section in the right panel shows status (idle/ideal/minting/cooldown)
+8. **Priority auto-promotion** — send 4+ messages to promote STRANGER → MATE, 5+ within 7 days for MATE → BESTIE
+9. **Vault burn counter** — increments on the receiver side each time a rekey coin is consumed (forward secrecy)
 
 ### Running the Headless Demo (no UI)
 
@@ -189,10 +212,13 @@ python -m AQM_Database.prototype    # 4-phase lifecycle demo (mint → fetch →
 
 ## Demo UI Features
 
+- **Login gate** — password-protected per-user instances (`--password` flag, `AQM_PASSWORD` env var, or default `aqm-demo-2026`)
 - **Real-time SSE** — messages appear instantly without polling
+- **PQ indicator dot** — top-right indicator changes by session tier (green=GOLD/PQ, yellow=SILVER/Hybrid, red=BRONZE/Classical)
 - **Session Tier** — shows the tier currently securing the active ratchet session
-- **Next Rekey Tier** — shows what tier the next coin would use based on current device context (updates every 8 seconds)
+- **Next Rekey Tier** — shows what tier the next coin would use based on current device context (updates every 20 seconds)
 - **Ratchet progress bar** — shows how many messages remain before the next rekey
+- **Background minting** — automatically mints new coins when device is in ideal state and vault is low (120s cooldown)
 - **Vault burn counter** — tracks private keys destroyed (perfect forward secrecy)
 - **Priority promotion bars** — live progress toward MATE and BESTIE thresholds
 - **Per-contact coin inventory** — GOLD/SILVER/BRONZE counts on each contact card
@@ -201,7 +227,7 @@ python -m AQM_Database.prototype    # 4-phase lifecycle demo (mint → fetch →
 
 ## Context-Based Tier Selection
 
-The device context simulator updates every 8 seconds with random values:
+The device context simulator updates every 20 seconds with random values:
 
 ```
 battery < 5%                    → BRONZE   (critical battery — conserve)

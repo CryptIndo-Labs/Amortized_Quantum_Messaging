@@ -1,0 +1,99 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aqm
+      POSTGRES_USER: aqm_user
+      POSTGRES_PASSWORD: "${AQM_DB_PASSWORD:-aqm_prod_password}"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./AQM_Database/aqm_server/migrations:/docker-entrypoint-initdb.d
+
+  coin-server:
+    build: .
+    restart: unless-stopped
+    command: >
+      uvicorn AQM_Database.aqm_server.api:app
+      --host 0.0.0.0 --port 8000
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+
+  alice:
+    build: .
+    restart: unless-stopped
+    command: >
+      python -m AQM_Database.flask_app.app
+      --user alice --port 5000 --host 0.0.0.0
+      --contacts bob charlie --contact-ports 5001 5002
+    depends_on:
+      - coin-server
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+      AQM_CONTACT_HOST_TEMPLATE: docker
+      AQM_PASSWORD: "${AQM_ALICE_PASSWORD:-aqm-demo-2026}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_ALICE:-change-me-alice}"
+
+  bob:
+    build: .
+    restart: unless-stopped
+    command: >
+      python -m AQM_Database.flask_app.app
+      --user bob --port 5001 --host 0.0.0.0
+      --contacts alice charlie --contact-ports 5000 5002
+    depends_on:
+      - coin-server
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+      AQM_CONTACT_HOST_TEMPLATE: docker
+      AQM_PASSWORD: "${AQM_BOB_PASSWORD:-aqm-demo-2026}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_BOB:-change-me-bob}"
+
+  charlie:
+    build: .
+    restart: unless-stopped
+    command: >
+      python -m AQM_Database.flask_app.app
+      --user charlie --port 5002 --host 0.0.0.0
+      --contacts alice bob --contact-ports 5000 5001
+    depends_on:
+      - coin-server
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+      AQM_CONTACT_HOST_TEMPLATE: docker
+      AQM_PASSWORD: "${AQM_CHARLIE_PASSWORD:-aqm-demo-2026}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_CHARLIE:-change-me-charlie}"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - alice
+      - bob
+      - charlie
+
+volumes:
+  redis_data:
+  pg_data:
+  caddy_data:
+  caddy_config:
