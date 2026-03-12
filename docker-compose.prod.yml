@@ -32,6 +32,8 @@ services:
   alice:
     build: .
     restart: unless-stopped
+    ports:
+      - "5000:5000"
     command: >
       python -m AQM_Database.flask_app.app
       --user alice --port 5000 --host 0.0.0.0
@@ -48,6 +50,8 @@ services:
   bob:
     build: .
     restart: unless-stopped
+    ports:
+      - "5001:5001"
     command: >
       python -m AQM_Database.flask_app.app
       --user bob --port 5001 --host 0.0.0.0
@@ -64,6 +68,8 @@ services:
   charlie:
     build: .
     restart: unless-stopped
+    ports:
+      - "5002:5002"
     command: >
       python -m AQM_Database.flask_app.app
       --user charlie --port 5002 --host 0.0.0.0
@@ -77,23 +83,6 @@ services:
       AQM_PASSWORD: "${AQM_CHARLIE_PASSWORD:-aqm-demo-2026}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_CHARLIE:-change-me-charlie}"
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - alice
-      - bob
-      - charlie
-
 volumes:
   redis_data:
   pg_data:
-  caddy_data:
-  caddy_config:
