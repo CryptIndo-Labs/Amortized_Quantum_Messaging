@@ -51,7 +51,7 @@ def generate_env(users: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def generate_compose(users: list[tuple[str, str]], base_port: int) -> str:
+def generate_compose(users: list[tuple[str, str]], base_port: int, *, expose_ports: bool = True) -> str:
     """Generate docker-compose.prod.yml contents."""
     # Fixed services
     yml = """\
@@ -95,13 +95,14 @@ services:
         contact_ports = " ".join(str(o[1]) for o in others)
         upper = name.upper()
 
+        ports_block = f"""    ports:
+      - "{port}:{port}"
+""" if expose_ports else ""
         yml += f"""
   {name}:
     build: .
     restart: unless-stopped
-    ports:
-      - "{port}:{port}"
-    command: >
+{ports_block}    command: >
       python -m AQM_Database.flask_app.app
       --user {name} --port {port} --host 0.0.0.0
       --contacts {contact_names} --contact-ports {contact_ports}
@@ -173,7 +174,7 @@ def main():
 
     # Generate files
     env_content = generate_env(users)
-    compose_content = generate_compose(users, args.base_port)
+    compose_content = generate_compose(users, args.base_port, expose_ports=not args.domain)
 
     if args.domain:
         caddyfile_content = generate_caddyfile(users, args.base_port, args.domain)
@@ -200,7 +201,10 @@ def main():
 
     print(f"\nGenerated config for {len(users)} users:")
     for i, (name, _) in enumerate(users):
-        print(f"  {name}: port {args.base_port + i}")
+        if args.domain:
+            print(f"  {name}: https://{name}.{args.domain}")
+        else:
+            print(f"  {name}: port {args.base_port + i}")
 
     if args.up:
         print("\nStarting services...")
