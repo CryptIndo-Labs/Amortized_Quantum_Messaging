@@ -129,7 +129,16 @@ def generate_caddyfile(users: list[tuple[str, str]], base_port: int, domain: str
     blocks = []
     for i, (name, _) in enumerate(users):
         port = base_port + i
-        blocks.append(f"{name}.{domain} {{\n    reverse_proxy {name}:{port}\n}}")
+        blocks.append(
+            f"{name}.{domain} {{\n"
+            f"    reverse_proxy {name}:{port}\n"
+            f"    header /stream {{\n"
+            f"        Cache-Control no-cache\n"
+            f"        X-Accel-Buffering no\n"
+            f"        Content-Type text/event-stream\n"
+            f"    }}\n"
+            f"}}"
+        )
     return "\n\n".join(blocks) + "\n"
 
 

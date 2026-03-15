@@ -404,7 +404,12 @@
           handleMintUpdate(data);
         }
       };
-      sseSource.onerror = () => { setConnStatus("disconnected"); if (sseSource){sseSource.close();sseSource=null;} setTimeout(connectSSE, 3000); };
+      sseSource.onerror = () => {
+        setConnStatus("disconnected");
+        if (sseSource){sseSource.close();sseSource=null;}
+        // Check if session expired before reconnecting
+        fetch("/api/status").then(r=>{if(r.status===401){window.location.href="/login";return} setTimeout(connectSSE, 3000);}).catch(()=>setTimeout(connectSSE, 5000));
+      };
     }
 
     function setConnStatus(s) {
@@ -415,7 +420,7 @@
     // ── Data loading ──────────────────────────────────────────────────
     function loadHistory(filterContact=null, forceScroll=false) {
       fetch("/api/history").then(r=>{if(r.status===401){window.location.href="/login";return} return r.json()}).then(d => {
-        if (!d) return;
+        if (!d || !d.messages) return;
         const msgs = filterContact ? d.messages.filter(m => m.sender===filterContact||m.recipient===filterContact) : d.messages;
         const c = document.getElementById("messages");
         const wasAtBottom = isNearBottom(), prevTop = c.scrollTop;
@@ -426,7 +431,7 @@
           msgs.forEach(m => appendMessage(m, false));
           if (forceScroll || wasAtBottom) scrollBottom(true); else c.scrollTop = prevTop;
         }
-      });
+      }).catch(()=>{});
     }
 
     function loadStatus() {

@@ -709,31 +709,31 @@ def api_send():
     if contact_id not in KNOWN_CONTACTS:
         return jsonify({"error": f"unknown contact: {contact_id}"}), 400
 
-    ctx        = _current_ctx
-    ideal_tier = _current_ideal_tier
-
-    contact  = contacts_db.get_contact(contact_id)
-    priority = contact.priority if contact else "STRANGER"
-    ceiling  = TIER_CEILING.get(priority, "BRONZE")
-
-    tier = ideal_tier if TIER_RANK.get(ideal_tier, 0) <= TIER_RANK.get(ceiling, 0) else ceiling
+    ctx = _current_ctx
 
     # Get or create ratchet FIRST — only consume a coin if rekey needed
     ratchet = get_ratchet(contact_id)
     kem_ct, coin_id_used, coin = None, None, None
 
-    # Force rekey if a higher tier is now available (e.g. priority promoted)
-    tier_upgraded = (
-        ratchet is not None
-        and not ratchet.needs_rekey()
-        and TIER_RANK.get(tier, 0) > TIER_RANK.get(ratchet.coin_tier, 0)
-    )
-    if tier_upgraded:
-        logger.info("Tier upgrade: %s → %s for %s — forcing rekey",
-                     ratchet.coin_tier, tier, contact_id)
+    if ratchet is not None and not ratchet.needs_rekey():
+        # ── Active session — context/tier changes are IRRELEVANT ──────────
+        # Tier is locked to whatever was negotiated at session start.
+        # The ratchet continues until send_counter hits max_messages.
+        coin = type('Coin', (), {
+            'coin_category': ratchet.coin_tier,
+            'key_id': None,
+        })()
+    else:
+        # ── New session or ratchet exhausted — evaluate context NOW ────────
+        # This is the ONLY moment context determines the tier.
+        # Once the coin is consumed and the ratchet initialised, context
+        # changes have no effect until the next rekey.
+        contact  = contacts_db.get_contact(contact_id)
+        priority = contact.priority if contact else "STRANGER"
+        ceiling  = TIER_CEILING.get(priority, "BRONZE")
+        ideal_tier = _current_ideal_tier
+        tier = ideal_tier if TIER_RANK.get(ideal_tier, 0) <= TIER_RANK.get(ceiling, 0) else ceiling
 
-    if ratchet is None or ratchet.needs_rekey() or tier_upgraded:
-        # Rekey — actually consume a coin from inventory
         coin = inventory.select_coin(contact_id, tier)
         if coin is None:
             return jsonify({"error": "no coins available"}), 503
@@ -746,12 +746,6 @@ def api_send():
         else:
             ratchet.rekey(shared_secret, coin.coin_category, is_initiator=True)
         coin_id_used = coin.key_id
-    else:
-        # Non-rekey — ratchet continues, no coin consumed
-        coin = type('Coin', (), {
-            'coin_category': ratchet.coin_tier,
-            'key_id': None,
-        })()
 
     msg_key     = ratchet.derive_send_key()
     aad         = f"{USER_ID}:{contact_id}".encode()
@@ -849,28 +843,35 @@ def api_receive():
     decrypted_text = parcel.get("plaintext", "")  # fallback: use included plaintext
 
     if "kem_ciphertext" in parcel and "coin_id" in parcel:
+        # ── Rekey parcel received — must burn our private key immediately ──
+        # Both sides burn: sender consumed the public key (zpopmin in inventory),
+        # receiver burns the private key here. After this, the coin is gone on both ends.
         try:
-            coin_id = parcel["coin_id"]
-            kem_ct  = base64.b64decode(parcel["kem_ciphertext"])
-            entry   = vault.fetch_key(coin_id)
-            if entry:
-                shared_secret = crypto.kem_decapsulate(kem_ct, entry.encrypted_blob, parcel.get("coin_tier", "BRONZE"))
-                coin_tier     = parcel.get("coin_tier", "BRONZE")
+            coin_id   = parcel["coin_id"]
+            coin_tier = parcel.get("coin_tier", "BRONZE")
+            kem_ct    = base64.b64decode(parcel["kem_ciphertext"])
+            entry     = vault.fetch_key(coin_id)
+
+            if entry is None:
+                # Key already burned (duplicate delivery) or never existed
+                logger.warning("Vault miss on receive — coin_id=%s already burned or unknown", coin_id)
+            else:
+                shared_secret = crypto.kem_decapsulate(kem_ct, entry.encrypted_blob, coin_tier)
+
+                # ── BURN immediately — one-time key, non-negotiable ──
+                vault.burn_key(coin_id)
+                _vault_burned += 1
+                _vault_active[coin_tier] = max(0, _vault_active.get(coin_tier, 0) - 1)
+                logger.info("Key burned — coin_id=%s tier=%s vault_active=%s burned_total=%d",
+                    coin_id, coin_tier, _vault_active, _vault_burned)
+
                 if ratchet is None:
                     ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
                 else:
                     ratchet.rekey(shared_secret, coin_tier, is_initiator=False)
 
-                vault.burn_key(coin_id)
-                _vault_burned += 1
-                _vault_active[parcel.get("coin_tier", "BRONZE")] = max(
-                    0, _vault_active.get(parcel.get("coin_tier", "BRONZE"), 0) - 1
-                )
-                logger.info("Key burned — coin_id=%s tier=%s vault_active=%s burned_total=%d",
-                    coin_id, parcel.get("coin_tier"), _vault_active, _vault_burned)
-
         except Exception as e:
-            logger.debug("KEM decap failed (expected in demo): %s", e)
+            logger.warning("KEM decap failed: %s", e)
 
     if ratchet:
         try:
