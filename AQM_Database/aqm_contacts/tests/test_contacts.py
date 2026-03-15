@@ -69,8 +69,8 @@ class TestRemoveContact:
     def test_cascades_message_log(self, db):
         """Deleting a contact also deletes their message_log rows (FK cascade)."""
         db.add_contact("alice-001", "Alice")
-        db.record_message("alice-001")
-        db.record_message("alice-001")
+        db.record_message("alice-001", "SENT")
+        db.record_message("alice-001", "RECEIVED")
         db.remove_contact("alice-001")
         # Verify message_log is empty for that contact
         db.cursor.execute(
@@ -122,34 +122,78 @@ class TestBulkQueries:
 
 class TestRecordMessage:
 
-    def test_increments_counts(self, db):
+    def test_increments_counts_bidirectional(self, db):
+        """Rolling counts only non-zero when both directions present."""
         db.add_contact("alice-001", "Alice")
-        c = db.record_message("alice-001")
+        c = db.record_message("alice-001", "SENT")
+        # Only one direction — rolling counts should be 0
         assert c.msg_count_total == 1
-        assert c.msg_count_7d >= 1
-        assert c.msg_count_30d >= 1
+        assert c.msg_count_7d == 0
+        assert c.msg_count_30d == 0
         assert c.last_msg_at is not None
 
-    def test_auto_promotes_to_mate(self, db):
-        """4 messages in 30 days → MATE (threshold from config)."""
+        # Add a received message — now both directions present
+        c = db.record_message("alice-001", "RECEIVED")
+        assert c.msg_count_total == 2
+        assert c.msg_count_7d == 2
+        assert c.msg_count_30d == 2
+
+    def test_one_sided_spam_does_not_promote(self, db):
+        """Sending 10 messages without any reply should NOT promote."""
         db.add_contact("alice-001", "Alice")
-        for _ in range(4):
-            c = db.record_message("alice-001")
+        for _ in range(10):
+            c = db.record_message("alice-001", "SENT")
+        assert c.priority == "STRANGER"
+        assert c.msg_count_7d == 0
+        assert c.msg_count_30d == 0
+
+    def test_one_sided_receive_does_not_promote(self, db):
+        """Receiving 10 messages without sending any should NOT promote."""
+        db.add_contact("alice-001", "Alice")
+        for _ in range(10):
+            c = db.record_message("alice-001", "RECEIVED")
+        assert c.priority == "STRANGER"
+        assert c.msg_count_7d == 0
+
+    def test_auto_promotes_to_mate_bidirectional(self, db):
+        """4+ messages in 30 days with BOTH directions → MATE."""
+        db.add_contact("alice-001", "Alice")
+        # 2 sent + 2 received = 4 total, both directions present
+        db.record_message("alice-001", "SENT")
+        db.record_message("alice-001", "RECEIVED")
+        db.record_message("alice-001", "SENT")
+        c = db.record_message("alice-001", "RECEIVED")
         assert c.priority == "MATE"
 
-    def test_auto_promotes_to_bestie(self, db):
-        """5 messages in 7 days → BESTIE (threshold from config)."""
+    def test_auto_promotes_to_bestie_bidirectional(self, db):
+        """5+ messages in 7 days with BOTH directions → BESTIE."""
         db.add_contact("alice-001", "Alice")
-        for _ in range(5):
-            c = db.record_message("alice-001")
+        # 3 sent + 2 received = 5 total
+        db.record_message("alice-001", "SENT")
+        db.record_message("alice-001", "RECEIVED")
+        db.record_message("alice-001", "SENT")
+        db.record_message("alice-001", "RECEIVED")
+        c = db.record_message("alice-001", "SENT")
         assert c.priority == "BESTIE"
 
     def test_stays_stranger_below_threshold(self, db):
-        """3 messages isn't enough for MATE."""
+        """3 bidirectional messages isn't enough for MATE."""
         db.add_contact("alice-001", "Alice")
-        for _ in range(3):
-            c = db.record_message("alice-001")
+        db.record_message("alice-001", "SENT")
+        db.record_message("alice-001", "RECEIVED")
+        c = db.record_message("alice-001", "SENT")
         assert c.priority == "STRANGER"
+
+    def test_invalid_direction_raises(self, db):
+        db.add_contact("alice-001", "Alice")
+        with pytest.raises(ValueError, match="Invalid direction"):
+            db.record_message("alice-001", "UNKNOWN")
+
+    def test_default_direction_is_sent(self, db):
+        """Backwards compat: default direction is SENT."""
+        db.add_contact("alice-001", "Alice")
+        c = db.record_message("alice-001")
+        assert c.msg_count_total == 1
 
 
 # ─── Priority locking ───────────────────────────────────────────
@@ -164,26 +208,28 @@ class TestPriorityLock:
         assert c.priority_locked == 1  # SQLite stores booleans as 1/0
 
     def test_locked_priority_survives_messages(self, db):
-        """Even 10 messages shouldn't change a locked STRANGER."""
+        """Even 10 bidirectional messages shouldn't change a locked STRANGER."""
         db.add_contact("alice-001", "Alice")
         db.lock_priority("alice-001", "STRANGER")
-        for _ in range(10):
-            c = db.record_message("alice-001")
+        for _ in range(5):
+            db.record_message("alice-001", "SENT")
+            c = db.record_message("alice-001", "RECEIVED")
         assert c.priority == "STRANGER"
 
     def test_unlock_allows_recompute(self, db):
         """After unlock, next message triggers recompute."""
         db.add_contact("alice-001", "Alice")
         db.lock_priority("alice-001", "STRANGER")
-        # Send 5 messages while locked
-        for _ in range(5):
-            db.record_message("alice-001")
+        # Send 3 + receive 3 = 6 bidirectional while locked
+        for _ in range(3):
+            db.record_message("alice-001", "SENT")
+            db.record_message("alice-001", "RECEIVED")
         c = db.get_contact("alice-001")
         assert c.priority == "STRANGER"  # still locked
 
         db.unlock_priority("alice-001")
-        c = db.record_message("alice-001")  # 6th message triggers recompute
-        assert c.priority == "BESTIE"  # 6 msgs in 7d >= 5
+        c = db.record_message("alice-001", "SENT")  # 7th message triggers recompute
+        assert c.priority == "BESTIE"  # 7 msgs in 7d >= 5, both directions present
 
     def test_lock_invalid_priority_returns_none(self, db):
         db.add_contact("alice-001", "Alice")
@@ -211,7 +257,7 @@ class TestBlockAndInactive:
         """Contacts with no messages should appear as inactive."""
         db.add_contact("a", "Alice")
         db.add_contact("b", "Bob")
-        db.record_message("b")  # Bob has activity
+        db.record_message("b", "SENT")  # Bob has activity
         inactive = db.get_inactive_contacts(days=30)
         ids = [c.contact_id for c in inactive]
         assert "a" in ids  # Alice never messaged → last_msg_at IS NULL
@@ -227,11 +273,12 @@ class TestRefreshRollingCounts:
         assert db.refresh_rolling_counts() == 0
 
     def test_recomputes_after_messages(self, db):
-        """Send enough messages, refresh, verify priority updated."""
+        """Send enough bidirectional messages, refresh, verify priority updated."""
         db.add_contact("alice-001", "Alice")
-        for _ in range(5):
-            db.record_message("alice-001")
-        # Already promoted by record_message, so refresh returns 0
+        for _ in range(3):
+            db.record_message("alice-001", "SENT")
+            db.record_message("alice-001", "RECEIVED")
+        # Already promoted by record_message (6 msgs, both dirs), so refresh returns 0
         assert db.refresh_rolling_counts() == 0
         c = db.get_contact("alice-001")
         assert c.priority == "BESTIE"

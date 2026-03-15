@@ -742,9 +742,9 @@ def api_send():
         ct, shared_secret = crypto.kem_encapsulate(coin.public_key, coin.coin_category)
         kem_ct = ct
         if ratchet is None:
-            ratchet = SessionRatchet(contact_id, coin.coin_category, shared_secret)
+            ratchet = SessionRatchet(contact_id, coin.coin_category, shared_secret, is_initiator=True)
         else:
-            ratchet.rekey(shared_secret, coin.coin_category)
+            ratchet.rekey(shared_secret, coin.coin_category, is_initiator=True)
         coin_id_used = coin.key_id
     else:
         # Non-rekey — ratchet continues, no coin consumed
@@ -753,7 +753,7 @@ def api_send():
             'key_id': None,
         })()
 
-    msg_key     = ratchet.derive_message_key()
+    msg_key     = ratchet.derive_send_key()
     aad         = f"{USER_ID}:{contact_id}".encode()
     enc_payload = crypto.encrypt_aead(plaintext.encode(), msg_key, aad)
     save_ratchet(ratchet)
@@ -785,13 +785,13 @@ def api_send():
         "device_ctx": parcel["device_ctx"],
         "ts":        time.time(),
         "rekey":     coin_id_used is not None,
-        "msg_count": ratchet.msg_counter,
+        "msg_count": ratchet.send_counter,
         "max_msgs":  ratchet.max_messages,
     }
     message_history.append(msg_record)
 
     try:
-        updated = contacts_db.record_message(contact_id)
+        updated = contacts_db.record_message(contact_id, direction="SENT")
         if updated:
             _on_priority_change(contact_id, updated.priority)
     except Exception:
@@ -857,9 +857,9 @@ def api_receive():
                 shared_secret = crypto.kem_decapsulate(kem_ct, entry.encrypted_blob, parcel.get("coin_tier", "BRONZE"))
                 coin_tier     = parcel.get("coin_tier", "BRONZE")
                 if ratchet is None:
-                    ratchet = SessionRatchet(sender, coin_tier, shared_secret)
+                    ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
                 else:
-                    ratchet.rekey(shared_secret, coin_tier)
+                    ratchet.rekey(shared_secret, coin_tier, is_initiator=False)
 
                 vault.burn_key(coin_id)
                 _vault_burned += 1
@@ -874,7 +874,7 @@ def api_receive():
 
     if ratchet:
         try:
-            msg_key  = ratchet.derive_message_key()
+            msg_key  = ratchet.derive_recv_key()
             aad      = f"{sender}:{USER_ID}".encode()
             enc_data = base64.b64decode(parcel["encrypted_payload"])
             decrypted_text = crypto.decrypt_aead(enc_data, msg_key, aad).decode()
@@ -893,14 +893,14 @@ def api_receive():
         "device_ctx": parcel.get("device_ctx", {}),
         "ts":         time.time(),
         "rekey":      "kem_ciphertext" in parcel,
-        "msg_count":  ratchet.msg_counter if ratchet else 0,
+        "msg_count":  ratchet.recv_counter if ratchet else 0,
         "max_msgs":   ratchet.max_messages if ratchet else 0,
         "incoming":   True,
     }
     message_history.append(incoming)
 
     try:
-        updated = contacts_db.record_message(sender)
+        updated = contacts_db.record_message(sender, direction="RECEIVED")
         if updated:
             _on_priority_change(sender, updated.priority)
     except Exception:

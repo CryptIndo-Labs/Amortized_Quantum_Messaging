@@ -34,9 +34,15 @@ class ContactsDatabase:
         self.cursor.execute("""CREATE TABLE IF NOT EXISTS message_log(
                                                       id INTEGER PRIMARY KEY AUTOINCREMENT,
                                                       contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+                                                      direction TEXT NOT NULL DEFAULT 'SENT' CHECK (direction IN ('SENT', 'RECEIVED')),
                                                       timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                           )
                        """)
+        # Migration: add direction column if table already exists without it
+        try:
+            self.cursor.execute("SELECT direction FROM message_log LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE message_log ADD COLUMN direction TEXT NOT NULL DEFAULT 'SENT' CHECK (direction IN ('SENT', 'RECEIVED'))")
 
         self.cursor.executescript("""
                        CREATE INDEX IF NOT EXISTS idx_priority ON contacts (priority);
@@ -113,20 +119,42 @@ class ContactsDatabase:
         contacts = self.cursor.fetchall()
         return self._extract_contacts(contacts)
 
-    def record_message(self , contact_id) -> Contact:
+    def record_message(self , contact_id, direction: str = "SENT") -> Contact:
+        if direction not in ("SENT", "RECEIVED"):
+            raise ValueError(f"Invalid direction: {direction}. Must be SENT or RECEIVED.")
         time = datetime.now()
-        self.cursor.execute("""INSERT INTO message_log (contact_id, timestamp) VALUES (?, ?)""", (contact_id,time))
+        self.cursor.execute("""INSERT INTO message_log (contact_id, direction, timestamp) VALUES (?, ?, ?)""", (contact_id, direction, time))
         self.cursor.execute("""UPDATE contacts SET msg_count_total = msg_count_total+1 , last_msg_at = ? WHERE contact_id = ?""", (time , contact_id))
 
-        #recalculating rolling counts
+        # Recalculating rolling counts — BIDIRECTIONAL: only count if BOTH
+        # directions have at least 1 message in the window. This prevents
+        # one-sided spamming from triggering promotion.
         self.cursor.execute("""
         UPDATE contacts SET
-            msg_count_7d  = (SELECT COUNT(*) FROM message_log
-                             WHERE contact_id = ? AND timestamp > datetime('now', '-7 days')),
-            msg_count_30d = (SELECT COUNT(*) FROM message_log
-                             WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
+            msg_count_7d = CASE
+                WHEN (SELECT COUNT(*) FROM message_log
+                      WHERE contact_id = ? AND direction = 'SENT'
+                      AND timestamp > datetime('now', '-7 days')) > 0
+                 AND (SELECT COUNT(*) FROM message_log
+                      WHERE contact_id = ? AND direction = 'RECEIVED'
+                      AND timestamp > datetime('now', '-7 days')) > 0
+                THEN (SELECT COUNT(*) FROM message_log
+                      WHERE contact_id = ? AND timestamp > datetime('now', '-7 days'))
+                ELSE 0
+            END,
+            msg_count_30d = CASE
+                WHEN (SELECT COUNT(*) FROM message_log
+                      WHERE contact_id = ? AND direction = 'SENT'
+                      AND timestamp > datetime('now', '-30 days')) > 0
+                 AND (SELECT COUNT(*) FROM message_log
+                      WHERE contact_id = ? AND direction = 'RECEIVED'
+                      AND timestamp > datetime('now', '-30 days')) > 0
+                THEN (SELECT COUNT(*) FROM message_log
+                      WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
+                ELSE 0
+            END
         WHERE contact_id = ?
-        """, (contact_id , contact_id , contact_id))
+        """, (contact_id, contact_id, contact_id, contact_id, contact_id, contact_id, contact_id))
 
         self.connection.commit()
         self._recompute_priority(contact_id)
@@ -161,12 +189,30 @@ class ContactsDatabase:
             cid = contact.contact_id
             self.cursor.execute("""
             UPDATE contacts SET
-                msg_count_7d  = (SELECT COUNT(*) FROM message_log
-                                 WHERE contact_id = ? AND timestamp > datetime('now', '-7 days')),
-                msg_count_30d = (SELECT COUNT(*) FROM message_log
-                                 WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
+                msg_count_7d = CASE
+                    WHEN (SELECT COUNT(*) FROM message_log
+                          WHERE contact_id = ? AND direction = 'SENT'
+                          AND timestamp > datetime('now', '-7 days')) > 0
+                     AND (SELECT COUNT(*) FROM message_log
+                          WHERE contact_id = ? AND direction = 'RECEIVED'
+                          AND timestamp > datetime('now', '-7 days')) > 0
+                    THEN (SELECT COUNT(*) FROM message_log
+                          WHERE contact_id = ? AND timestamp > datetime('now', '-7 days'))
+                    ELSE 0
+                END,
+                msg_count_30d = CASE
+                    WHEN (SELECT COUNT(*) FROM message_log
+                          WHERE contact_id = ? AND direction = 'SENT'
+                          AND timestamp > datetime('now', '-30 days')) > 0
+                     AND (SELECT COUNT(*) FROM message_log
+                          WHERE contact_id = ? AND direction = 'RECEIVED'
+                          AND timestamp > datetime('now', '-30 days')) > 0
+                    THEN (SELECT COUNT(*) FROM message_log
+                          WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
+                    ELSE 0
+                END
             WHERE contact_id = ?
-            """, (cid, cid, cid))
+            """, (cid, cid, cid, cid, cid, cid, cid))
 
             if self._recompute_priority(cid) is not None:
                 updates += 1
