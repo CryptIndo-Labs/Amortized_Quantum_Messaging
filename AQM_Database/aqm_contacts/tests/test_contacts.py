@@ -166,15 +166,27 @@ class TestRecordMessage:
         assert c.priority == "MATE"
 
     def test_auto_promotes_to_bestie_bidirectional(self, db):
-        """5+ messages in 7 days with BOTH directions → BESTIE."""
+        """Balanced exchanges in 7 days → BESTIE (needs 3+3=6 paired count ≥ 5)."""
         db.add_contact("alice-001", "Alice")
-        # 3 sent + 2 received = 5 total
+        # 3 sent + 3 received → 2*min(3,3)=6 ≥ 5
         db.record_message("alice-001", "SENT")
         db.record_message("alice-001", "RECEIVED")
         db.record_message("alice-001", "SENT")
         db.record_message("alice-001", "RECEIVED")
-        c = db.record_message("alice-001", "SENT")
+        db.record_message("alice-001", "SENT")
+        c = db.record_message("alice-001", "RECEIVED")
         assert c.priority == "BESTIE"
+
+    def test_spam_then_single_reply_stays_stranger(self, db):
+        """100 sent + 1 received must NOT promote (rolling count = 2, not 101)."""
+        db.add_contact("alice-001", "Alice")
+        for _ in range(100):
+            db.record_message("alice-001", "SENT")
+        c = db.record_message("alice-001", "RECEIVED")
+        # 2*min(100,1) = 2, well below MATE threshold of 4
+        assert c.priority == "STRANGER"
+        assert c.msg_count_7d == 2
+        assert c.msg_count_30d == 2
 
     def test_stays_stranger_below_threshold(self, db):
         """3 bidirectional messages isn't enough for MATE."""

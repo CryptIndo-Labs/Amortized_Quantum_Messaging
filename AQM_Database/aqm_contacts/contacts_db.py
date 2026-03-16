@@ -126,35 +126,29 @@ class ContactsDatabase:
         self.cursor.execute("""INSERT INTO message_log (contact_id, direction, timestamp) VALUES (?, ?, ?)""", (contact_id, direction, time))
         self.cursor.execute("""UPDATE contacts SET msg_count_total = msg_count_total+1 , last_msg_at = ? WHERE contact_id = ?""", (time , contact_id))
 
-        # Recalculating rolling counts — BIDIRECTIONAL: only count if BOTH
-        # directions have at least 1 message in the window. This prevents
-        # one-sided spamming from triggering promotion.
+        # Recalculating rolling counts — uses 2 * MIN(sent, received) so
+        # only balanced exchanges count.  One-sided spam (100 sent + 1
+        # received) yields 2, not 101.
         self.cursor.execute("""
         UPDATE contacts SET
-            msg_count_7d = CASE
-                WHEN (SELECT COUNT(*) FROM message_log
-                      WHERE contact_id = ? AND direction = 'SENT'
-                      AND timestamp > datetime('now', '-7 days')) > 0
-                 AND (SELECT COUNT(*) FROM message_log
-                      WHERE contact_id = ? AND direction = 'RECEIVED'
-                      AND timestamp > datetime('now', '-7 days')) > 0
-                THEN (SELECT COUNT(*) FROM message_log
-                      WHERE contact_id = ? AND timestamp > datetime('now', '-7 days'))
-                ELSE 0
-            END,
-            msg_count_30d = CASE
-                WHEN (SELECT COUNT(*) FROM message_log
-                      WHERE contact_id = ? AND direction = 'SENT'
-                      AND timestamp > datetime('now', '-30 days')) > 0
-                 AND (SELECT COUNT(*) FROM message_log
-                      WHERE contact_id = ? AND direction = 'RECEIVED'
-                      AND timestamp > datetime('now', '-30 days')) > 0
-                THEN (SELECT COUNT(*) FROM message_log
-                      WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
-                ELSE 0
-            END
+            msg_count_7d = 2 * MIN(
+                (SELECT COUNT(*) FROM message_log
+                 WHERE contact_id = ? AND direction = 'SENT'
+                 AND timestamp > datetime('now', '-7 days')),
+                (SELECT COUNT(*) FROM message_log
+                 WHERE contact_id = ? AND direction = 'RECEIVED'
+                 AND timestamp > datetime('now', '-7 days'))
+            ),
+            msg_count_30d = 2 * MIN(
+                (SELECT COUNT(*) FROM message_log
+                 WHERE contact_id = ? AND direction = 'SENT'
+                 AND timestamp > datetime('now', '-30 days')),
+                (SELECT COUNT(*) FROM message_log
+                 WHERE contact_id = ? AND direction = 'RECEIVED'
+                 AND timestamp > datetime('now', '-30 days'))
+            )
         WHERE contact_id = ?
-        """, (contact_id, contact_id, contact_id, contact_id, contact_id, contact_id, contact_id))
+        """, (contact_id, contact_id, contact_id, contact_id, contact_id))
 
         self.connection.commit()
         self._recompute_priority(contact_id)
@@ -189,30 +183,24 @@ class ContactsDatabase:
             cid = contact.contact_id
             self.cursor.execute("""
             UPDATE contacts SET
-                msg_count_7d = CASE
-                    WHEN (SELECT COUNT(*) FROM message_log
-                          WHERE contact_id = ? AND direction = 'SENT'
-                          AND timestamp > datetime('now', '-7 days')) > 0
-                     AND (SELECT COUNT(*) FROM message_log
-                          WHERE contact_id = ? AND direction = 'RECEIVED'
-                          AND timestamp > datetime('now', '-7 days')) > 0
-                    THEN (SELECT COUNT(*) FROM message_log
-                          WHERE contact_id = ? AND timestamp > datetime('now', '-7 days'))
-                    ELSE 0
-                END,
-                msg_count_30d = CASE
-                    WHEN (SELECT COUNT(*) FROM message_log
-                          WHERE contact_id = ? AND direction = 'SENT'
-                          AND timestamp > datetime('now', '-30 days')) > 0
-                     AND (SELECT COUNT(*) FROM message_log
-                          WHERE contact_id = ? AND direction = 'RECEIVED'
-                          AND timestamp > datetime('now', '-30 days')) > 0
-                    THEN (SELECT COUNT(*) FROM message_log
-                          WHERE contact_id = ? AND timestamp > datetime('now', '-30 days'))
-                    ELSE 0
-                END
+                msg_count_7d = 2 * MIN(
+                    (SELECT COUNT(*) FROM message_log
+                     WHERE contact_id = ? AND direction = 'SENT'
+                     AND timestamp > datetime('now', '-7 days')),
+                    (SELECT COUNT(*) FROM message_log
+                     WHERE contact_id = ? AND direction = 'RECEIVED'
+                     AND timestamp > datetime('now', '-7 days'))
+                ),
+                msg_count_30d = 2 * MIN(
+                    (SELECT COUNT(*) FROM message_log
+                     WHERE contact_id = ? AND direction = 'SENT'
+                     AND timestamp > datetime('now', '-30 days')),
+                    (SELECT COUNT(*) FROM message_log
+                     WHERE contact_id = ? AND direction = 'RECEIVED'
+                     AND timestamp > datetime('now', '-30 days'))
+                )
             WHERE contact_id = ?
-            """, (cid, cid, cid, cid, cid, cid, cid))
+            """, (cid, cid, cid, cid, cid))
 
             if self._recompute_priority(cid) is not None:
                 updates += 1
