@@ -739,6 +739,10 @@ def api_send():
             return jsonify({"error": "no coins available"}), 503
         logger.info("Coin consumed (rekey) — contact=%s tier=%s key_id=%s remaining=%s",
                     contact_id, tier, coin.key_id, coin_counts(contact_id))
+        # Track local user's coin burn for Proof-of-Burn promotion
+        burn_result = contacts_db.handle_coin_burn(contact_id, tier, is_local_user_burning=True)
+        if burn_result:
+            _on_priority_change(contact_id, burn_result)
         ct, shared_secret = crypto.kem_encapsulate(coin.public_key, coin.coin_category)
         kem_ct = ct
         if ratchet is None:
@@ -778,7 +782,7 @@ def api_send():
         "tier_color": tier_color(coin.coin_category),
         "device_ctx": parcel["device_ctx"],
         "ts":        time.time(),
-        "rekey":     coin_id_used is not None,
+        "rekey":     coin_id_used is not None or ratchet.send_counter == 1,
         "msg_count": ratchet.send_counter,
         "max_msgs":  ratchet.max_messages,
     }
@@ -864,6 +868,10 @@ def api_receive():
                 _vault_active[coin_tier] = max(0, _vault_active.get(coin_tier, 0) - 1)
                 logger.info("Key burned — coin_id=%s tier=%s vault_active=%s burned_total=%d",
                     coin_id, coin_tier, _vault_active, _vault_burned)
+                # Track remote user's coin burn for Proof-of-Burn promotion
+                burn_result = contacts_db.handle_coin_burn(sender, coin_tier, is_local_user_burning=False)
+                if burn_result:
+                    _on_priority_change(sender, burn_result)
 
                 if ratchet is None:
                     ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
@@ -893,7 +901,7 @@ def api_receive():
         "tier_color": tier_color(parcel.get("coin_tier", "BRONZE")),
         "device_ctx": parcel.get("device_ctx", {}),
         "ts":         time.time(),
-        "rekey":      "kem_ciphertext" in parcel,
+        "rekey":      "kem_ciphertext" in parcel or (ratchet is not None and ratchet.recv_counter == 1),
         "msg_count":  ratchet.recv_counter if ratchet else 0,
         "max_msgs":   ratchet.max_messages if ratchet else 0,
         "incoming":   True,

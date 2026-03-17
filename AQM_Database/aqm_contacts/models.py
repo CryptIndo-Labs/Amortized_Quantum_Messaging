@@ -13,3 +13,7 @@ class Contact:
     msg_count_30d: int
     priority_locked: bool
     is_blocked: bool
+    my_burned_bronze: int = 0
+    their_burned_bronze: int = 0
+    my_burned_silver: int = 0
+    their_burned_silver: int = 0

@@ -26,8 +26,12 @@ class ContactsDatabase:
                                                  msg_count_7d       INTEGER DEFAULT 0, -- rolling 7-day message count
                                                  msg_count_30d      INTEGER DEFAULT 0, -- rolling 30-day message count
                                                  priority_locked    BOOLEAN DEFAULT 0, -- manual override (user pins priority)
-                                                 is_blocked         BOOLEAN DEFAULT 0
-        
+                                                 is_blocked         BOOLEAN DEFAULT 0,
+                                                 my_burned_bronze   INTEGER DEFAULT 0,
+                                                 their_burned_bronze INTEGER DEFAULT 0,
+                                                 my_burned_silver   INTEGER DEFAULT 0,
+                                                 their_burned_silver INTEGER DEFAULT 0
+
                        )""")
 
         #The log stores one row per message. Rolling counts are recalculated from it.
@@ -43,6 +47,13 @@ class ContactsDatabase:
             self.cursor.execute("SELECT direction FROM message_log LIMIT 1")
         except sqlite3.OperationalError:
             self.cursor.execute("ALTER TABLE message_log ADD COLUMN direction TEXT NOT NULL DEFAULT 'SENT' CHECK (direction IN ('SENT', 'RECEIVED'))")
+
+        # Migration: add burn tracking columns for Proof-of-Burn promotion
+        for col in ("my_burned_bronze", "their_burned_bronze", "my_burned_silver", "their_burned_silver"):
+            try:
+                self.cursor.execute(f"SELECT {col} FROM contacts LIMIT 1")
+            except sqlite3.OperationalError:
+                self.cursor.execute(f"ALTER TABLE contacts ADD COLUMN {col} INTEGER DEFAULT 0")
 
         self.cursor.executescript("""
                        CREATE INDEX IF NOT EXISTS idx_priority ON contacts (priority);
@@ -161,17 +172,90 @@ class ContactsDatabase:
         if contact.priority_locked:
             return None # user pinned
 
+        # Burn-based floor: mutual burns can never be demoted below
+        mutual_bronze = min(contact.my_burned_bronze, contact.their_burned_bronze)
+        mutual_silver = min(contact.my_burned_silver, contact.their_burned_silver)
+
+        burn_floor = "STRANGER"
+        if mutual_silver >= 2 or mutual_bronze >= 4:
+            burn_floor = "BESTIE"
+        elif mutual_bronze >= 2:
+            burn_floor = "MATE"
+
+        # Message-count based promotion
         if contact.msg_count_7d >= config.CONTACT_THRESHOLDS["BESTIE_THRESHOLD_7D"]:
-            new_priority = "BESTIE"
+            msg_priority = "BESTIE"
         elif contact.msg_count_30d >= config.CONTACT_THRESHOLDS["MATE_THRESHOLD_30D"]:
-            new_priority = "MATE"
+            msg_priority = "MATE"
         else:
-            new_priority = "STRANGER"
+            msg_priority = "STRANGER"
+
+        # Take the higher of burn-floor and msg-based priority
+        rank = {"STRANGER": 0, "MATE": 1, "BESTIE": 2}
+        new_priority = burn_floor if rank[burn_floor] > rank[msg_priority] else msg_priority
 
         if new_priority != contact.priority:
             self.cursor.execute("""UPDATE contacts SET priority = ? WHERE contact_id = ?""", (new_priority, contact_id))
             self.connection.commit()
             return new_priority
+        return None
+
+    def handle_coin_burn(self, contact_id: str, coin_type: str, is_local_user_burning: bool) -> str | None:
+        """Track directional coin burns and evaluate Proof-of-Burn promotion.
+
+        Returns new priority string if promotion occurred, else None.
+        Burn counters start from 0 and reset to 0 on each promotion.
+        """
+        if coin_type not in ("BRONZE", "SILVER"):
+            return None  # GOLD burns don't affect promotion (already BESTIE)
+
+        # 1. Increment the correct directional counter
+        if coin_type == "BRONZE":
+            col = "my_burned_bronze" if is_local_user_burning else "their_burned_bronze"
+        else:
+            col = "my_burned_silver" if is_local_user_burning else "their_burned_silver"
+
+        self.cursor.execute(
+            f"UPDATE contacts SET {col} = {col} + 1 WHERE contact_id = ?",
+            (contact_id,),
+        )
+
+        # 2. Fetch the updated state
+        self.cursor.execute("""
+            SELECT priority, my_burned_bronze, their_burned_bronze,
+                   my_burned_silver, their_burned_silver
+            FROM contacts WHERE contact_id = ?
+        """, (contact_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+
+        current_priority = row[0]
+        mutual_bronze = min(row[1], row[2])
+        mutual_silver = min(row[3], row[4])
+
+        # 3. Evaluate the Proof-of-Burn state machine
+        new_priority = current_priority
+        if current_priority == "STRANGER":
+            if mutual_bronze >= 2:
+                new_priority = "MATE"
+        elif current_priority == "MATE":
+            if mutual_silver >= 2 or mutual_bronze >= 4:
+                new_priority = "BESTIE"
+
+        # 4. Apply promotion and reset ALL burn counters
+        if new_priority != current_priority:
+            self.cursor.execute("""
+                UPDATE contacts
+                SET priority = ?,
+                    my_burned_bronze = 0, their_burned_bronze = 0,
+                    my_burned_silver = 0, their_burned_silver = 0
+                WHERE contact_id = ?
+            """, (new_priority, contact_id))
+            self.connection.commit()
+            return new_priority
+
+        self.connection.commit()
         return None
 
     def refresh_rolling_counts(self) -> int:
