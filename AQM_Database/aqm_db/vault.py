@@ -8,8 +8,9 @@ from AQM_Database.aqm_shared.types import VaultEntry, VaultStats
 
 
 class SecureVault:
-    def __init__(self, client: redis.Redis):
+    def __init__(self, client: redis.Redis, user_id: str = "default"):
         self.db: redis.Redis = client
+        self._stats_key = f"vault:v1:stats:{user_id}"
 
     def _vault_key(self, key_id: str) -> str:
         return f"{config.VAULT_KEY_PREFIX}:{key_id}"
@@ -73,7 +74,7 @@ class SecureVault:
             pipe = self.db.pipeline(transaction=True)
             pipe.hset(full_key, mapping=mapping)
             pipe.expire(full_key, config.VAULT_KEY_TTL_SECONDS)
-            pipe.hincrby(config.VAULT_STATS_KEY, f"active_{coin_category.lower()}", 1)
+            pipe.hincrby(self._stats_key, f"active_{coin_category.lower()}", 1)
             pipe.execute()
 
             return True
@@ -96,8 +97,8 @@ class SecureVault:
             pipe = self.db.pipeline(transaction=True)
             pipe.hset(full_key, "status", "BURNED")
             pipe.expire(full_key, config.VAULT_BURN_GRACE_SECONDS)
-            pipe.hincrby(config.VAULT_STATS_KEY, f"active_{coin_cat.lower()}", -1)
-            pipe.hincrby(config.VAULT_STATS_KEY, "total_burned", 1)
+            pipe.hincrby(self._stats_key, f"active_{coin_cat.lower()}", -1)
+            pipe.hincrby(self._stats_key, "total_burned", 1)
             pipe.execute()
 
             return True
@@ -130,10 +131,10 @@ class SecureVault:
 
         try:
             if coin_category is not None:
-                val = self.db.hget(config.VAULT_STATS_KEY, f"active_{coin_category.lower()}")
+                val = self.db.hget(self._stats_key, f"active_{coin_category.lower()}")
                 return int(val) if val else 0
 
-            stats = self.db.hgetall(config.VAULT_STATS_KEY)
+            stats = self.db.hgetall(self._stats_key)
             return {
                 "GOLD": int(stats.get(b"active_gold", 0)),
                 "SILVER": int(stats.get(b"active_silver", 0)),
@@ -196,8 +197,8 @@ class SecureVault:
                     coin_cat = category.decode()
                     pipe = self.db.pipeline(transaction=True)
                     pipe.delete(key)
-                    pipe.hincrby(config.VAULT_STATS_KEY, f"active_{coin_cat.lower()}", -1)
-                    pipe.hincrby(config.VAULT_STATS_KEY, "total_expired", 1)
+                    pipe.hincrby(self._stats_key, f"active_{coin_cat.lower()}", -1)
+                    pipe.hincrby(self._stats_key, "total_expired", 1)
                     pipe.execute()
                     purged += 1
 
@@ -209,7 +210,7 @@ class SecureVault:
 
     def get_stats(self) -> VaultStats:
         try:
-            stats = self.db.hgetall(config.VAULT_STATS_KEY)
+            stats = self.db.hgetall(self._stats_key)
             return VaultStats(
                 active_gold=int(stats.get(b"active_gold", 0)),
                 active_silver=int(stats.get(b"active_silver", 0)),
