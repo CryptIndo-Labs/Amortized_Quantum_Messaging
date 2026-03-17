@@ -166,7 +166,7 @@ message_history: list[dict] = []
 
 # Vault tracking (in-memory, per-user — avoids shared Redis stats)
 _vault_burned: int = 0
-_vault_active: dict[str, int] = {"GOLD": 5, "SILVER": 6, "BRONZE": 5}
+_vault_active: dict[str, int] = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
 
 # ── Background minting state ─────────────────────────────────────────────────
 
@@ -185,10 +185,9 @@ _mint_ideal_streak = 0                       # consecutive ideal-state ticks
 
 def _vault_is_low() -> bool:
     """Return True if any tier has fallen below the low-watermark threshold."""
-    n = max(len(KNOWN_CONTACTS), 1)
-    for tier, count in _vault_active.items():
-        target = aqm_config.BUDGET_CAPS["BESTIE"][tier] * n
-        if target > 0 and count / target < _MINT_LOW_WATERMARK:
+    targets = _mint_targets_for_contacts()
+    for tier, target in targets.items():
+        if target > 0 and _vault_active.get(tier, 0) / target < _MINT_LOW_WATERMARK:
             return True
     return False
 
@@ -202,11 +201,7 @@ def _do_background_mint() -> dict:
     """
     global _vault_active, _is_minting, _last_mint_time, _last_mint_result
 
-    targets = {
-        "GOLD":   5,
-        "SILVER": 6,
-        "BRONZE": 5,
-    }
+    targets = _mint_targets_for_contacts()
 
     minted_counts = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
     minted_bundles = []
@@ -407,14 +402,53 @@ def _update_inventory_priority(contact_id: str, new_priority: str):
     except Exception as e:
         logger.warning("Could not update inventory priority: %s", e)
 
+def _mint_targets_for_contacts() -> dict[str, int]:
+    """Compute vault mint targets based on the HIGHEST priority among all contacts.
+
+    STRANGER contacts only need BRONZE, MATE needs SILVER+BRONZE,
+    BESTIE needs all three.  We mint to the max across all contacts
+    so coins are ready when any contact reaches that tier.
+    """
+    merged: dict[str, int] = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
+    for cid in KNOWN_CONTACTS:
+        contact = contacts_db.get_contact(cid)
+        priority = contact.priority if contact else "STRANGER"
+        caps = aqm_config.BUDGET_CAPS.get(priority, aqm_config.BUDGET_CAPS["STRANGER"])
+        for tier, cap in caps.items():
+            merged[tier] = max(merged[tier], cap)
+    return merged
+
+
 def bootstrap():
     """Mint coins for self, register all known contacts."""
+    global _vault_active
     logger.info("Bootstrapping AQM for user: %s", USER_ID)
 
-    targets = {"GOLD": 5, "SILVER": 6, "BRONZE": 5}
-    minted, minted_bundles = 0, []
+    # Register contacts FIRST so we know their priorities for minting
+    for cid in KNOWN_CONTACTS:
+        try:
+            existing = contacts_db.get_contact(cid)
+            if not existing:
+                contacts_db.add_contact(cid, cid.capitalize())
+                existing = contacts_db.get_contact(cid)
 
+            correct_priority = existing.priority if existing else "STRANGER"
+            _last_known_priority[cid] = correct_priority
+
+            _update_inventory_priority(cid, correct_priority)
+            inventory.register_contact(cid, correct_priority, cid.capitalize())
+            logger.info("Contact %s restored with priority: %s", cid, correct_priority)
+        except Exception as e:
+            logger.warning("Could not register contact %s: %s", cid, e)
+
+    # Mint only what's needed for current contact priorities
+    targets = _mint_targets_for_contacts()
+    logger.info("Mint targets based on contact priorities: %s", targets)
+
+    minted, minted_bundles = 0, []
     for tier, count in targets.items():
+        if count == 0:
+            continue
         for _ in range(count):
             bundle = crypto.mint_coin(tier)
             minted_bundles.append(bundle)
@@ -428,7 +462,9 @@ def bootstrap():
                 auth_tag=dummy_auth_tag,
             )
             minted += 1
-    logger.info("Minted %d new coins", minted)
+            _vault_active[tier] = _vault_active.get(tier, 0) + 1
+
+    logger.info("Minted %d coins (vault: %s)", minted, _vault_active)
 
     uploads = [
         CoinUpload(
@@ -443,26 +479,6 @@ def bootstrap():
         logger.info("Uploading %d coins to server", len(uploads))
         run_async(upload_coins(coin_server, USER_UUIDS[USER_ID], uploads))
         logger.info("Uploaded %d coins", len(uploads))
-
-    # Register every known contact
-    for cid in KNOWN_CONTACTS:
-        try:
-            existing = contacts_db.get_contact(cid)
-            if not existing:
-                contacts_db.add_contact(cid, cid.capitalize())
-                existing = contacts_db.get_contact(cid)
-
-            correct_priority = existing.priority if existing else "STRANGER"
-            _last_known_priority[cid] = correct_priority
-
-            # Force-set Redis meta from SQLite source of truth
-            _update_inventory_priority(cid, correct_priority)
-            # register_contact only inserts if Redis key is missing
-            inventory.register_contact(cid, correct_priority, cid.capitalize())
-
-            logger.info("Contact %s restored with priority: %s", cid, correct_priority)
-        except Exception as e:
-            logger.warning("Could not register contact %s: %s", cid, e)
 
     # Sync inventory from server for each contact
     for cid in KNOWN_CONTACTS:
@@ -494,6 +510,20 @@ def _on_priority_change(contact_id: str, new_priority: str):
         _update_inventory_priority(contact_id, new_priority)
     except Exception:
         pass
+
+    # Mint higher-tier coins now needed for the new priority level
+    new_targets = _mint_targets_for_contacts()
+    mint_needed = False
+    for tier, target in new_targets.items():
+        if _vault_active.get(tier, 0) < target:
+            mint_needed = True
+            break
+    if mint_needed:
+        try:
+            result = _do_background_mint()
+            logger.info("Post-promotion mint for %s: %s", contact_id, result)
+        except Exception as e:
+            logger.warning("Post-promotion mint failed: %s", e)
 
     # Re-sync from server with new (higher) caps
     if contact_id in USER_UUIDS:
