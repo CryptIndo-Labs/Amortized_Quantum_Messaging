@@ -129,7 +129,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400  # 24 hours
 # ── AQM subsystem init ────────────────────────────────────────────────────────
 vault_client     = create_vault_client()
 inv_client       = create_inventory_client()
-vault            = SecureVault(vault_client)
+vault = SecureVault(vault_client, user_id=USER_ID)
 inventory        = SmartInventory(inv_client)
 reporter         = StorageReporter(vault, inventory)
 # --- REAL COIN SERVER CONNECTION ---
