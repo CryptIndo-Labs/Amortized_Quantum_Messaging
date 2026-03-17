@@ -153,6 +153,7 @@ USER_UUIDS: dict[str, UUID] = {
 contacts_db      = ContactsDatabase(db_path=f"~/.aqm/{USER_ID}_contacts.db")
 session_store    = SessionStore(db_path=f"{USER_ID}_sessions.db")
 crypto           = CryptoEngine()
+_crypto_lock     = threading.Lock()   # liboqs is not thread-safe — serialize all crypto calls
 context_mgr      = ContextManager()
 
 # In-memory active ratchets
@@ -164,9 +165,7 @@ sse_queue: queue.Queue = queue.Queue(maxsize=100)
 # Message history (in-memory, per session)
 message_history: list[dict] = []
 
-# Vault tracking (in-memory, per-user — avoids shared Redis stats)
-_vault_burned: int = 0
-_vault_active: dict[str, int] = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
+# Vault stats are read directly from Redis via vault.get_stats() — no in-memory cache
 
 # ── Background minting state ─────────────────────────────────────────────────
 
@@ -185,9 +184,11 @@ _mint_ideal_streak = 0                       # consecutive ideal-state ticks
 
 def _vault_is_low() -> bool:
     """Return True if any tier has fallen below the low-watermark threshold."""
-    targets = _mint_targets_for_contacts()
+    stats = vault.get_stats()
+    current = {"GOLD": stats.active_gold, "SILVER": stats.active_silver, "BRONZE": stats.active_bronze}
+    targets = {"GOLD": 5, "SILVER": 6, "BRONZE": 5}
     for tier, target in targets.items():
-        if target > 0 and _vault_active.get(tier, 0) / target < _MINT_LOW_WATERMARK:
+        if target > 0 and current[tier] / target < _MINT_LOW_WATERMARK:
             return True
     return False
 
@@ -199,21 +200,28 @@ def _do_background_mint() -> dict:
     Returns dict {tier: minted_count} or raises on failure.
     Runs in the context-simulator thread — must not block for long.
     """
-    global _vault_active, _is_minting, _last_mint_time, _last_mint_result
+    global _is_minting, _last_mint_time, _last_mint_result
 
-    targets = _mint_targets_for_contacts()
+    targets = {
+        "GOLD":   5,
+        "SILVER": 6,
+        "BRONZE": 5,
+    }
 
     minted_counts = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
     minted_bundles = []
 
+    stats = vault.get_stats()
+    current_counts = {"GOLD": stats.active_gold, "SILVER": stats.active_silver, "BRONZE": stats.active_bronze}
     for tier, target in targets.items():
-        current = _vault_active.get(tier, 0)
+        current = current_counts.get(tier, 0)
         needed  = max(0, target - current)
         if needed == 0:
             continue
 
         for _ in range(needed):
-            bundle = crypto.mint_coin(tier)
+            with _crypto_lock:
+                bundle = crypto.mint_coin(tier)
             dummy_iv       = bytes(12)
             dummy_auth_tag = bytes(16)
             vault.store_key(
@@ -244,10 +252,6 @@ def _do_background_mint() -> dict:
     ]
     run_async(upload_coins(coin_server, USER_UUIDS[USER_ID], uploads))
     logger.info("Uploaded %d background-minted coins", total)
-
-    # Update in-memory vault tracker
-    for tier, cnt in minted_counts.items():
-        _vault_active[tier] = _vault_active.get(tier, 0) + cnt
 
     # Re-sync inventory for all contacts so they can fetch new coins
     for cid in KNOWN_CONTACTS:
@@ -402,55 +406,17 @@ def _update_inventory_priority(contact_id: str, new_priority: str):
     except Exception as e:
         logger.warning("Could not update inventory priority: %s", e)
 
-def _mint_targets_for_contacts() -> dict[str, int]:
-    """Compute vault mint targets based on the HIGHEST priority among all contacts.
-
-    STRANGER contacts only need BRONZE, MATE needs SILVER+BRONZE,
-    BESTIE needs all three.  We mint to the max across all contacts
-    so coins are ready when any contact reaches that tier.
-    """
-    merged: dict[str, int] = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
-    for cid in KNOWN_CONTACTS:
-        contact = contacts_db.get_contact(cid)
-        priority = contact.priority if contact else "STRANGER"
-        caps = aqm_config.BUDGET_CAPS.get(priority, aqm_config.BUDGET_CAPS["STRANGER"])
-        for tier, cap in caps.items():
-            merged[tier] = max(merged[tier], cap)
-    return merged
-
-
 def bootstrap():
     """Mint coins for self, register all known contacts."""
-    global _vault_active
     logger.info("Bootstrapping AQM for user: %s", USER_ID)
 
-    # Register contacts FIRST so we know their priorities for minting
-    for cid in KNOWN_CONTACTS:
-        try:
-            existing = contacts_db.get_contact(cid)
-            if not existing:
-                contacts_db.add_contact(cid, cid.capitalize())
-                existing = contacts_db.get_contact(cid)
-
-            correct_priority = existing.priority if existing else "STRANGER"
-            _last_known_priority[cid] = correct_priority
-
-            _update_inventory_priority(cid, correct_priority)
-            inventory.register_contact(cid, correct_priority, cid.capitalize())
-            logger.info("Contact %s restored with priority: %s", cid, correct_priority)
-        except Exception as e:
-            logger.warning("Could not register contact %s: %s", cid, e)
-
-    # Mint only what's needed for current contact priorities
-    targets = _mint_targets_for_contacts()
-    logger.info("Mint targets based on contact priorities: %s", targets)
-
+    targets = {"GOLD": 5, "SILVER": 6, "BRONZE": 5}
     minted, minted_bundles = 0, []
+
     for tier, count in targets.items():
-        if count == 0:
-            continue
         for _ in range(count):
-            bundle = crypto.mint_coin(tier)
+            with _crypto_lock:
+                bundle = crypto.mint_coin(tier)
             minted_bundles.append(bundle)
             dummy_iv       = bytes(12)
             dummy_auth_tag = bytes(16)
@@ -462,9 +428,7 @@ def bootstrap():
                 auth_tag=dummy_auth_tag,
             )
             minted += 1
-            _vault_active[tier] = _vault_active.get(tier, 0) + 1
-
-    logger.info("Minted %d coins (vault: %s)", minted, _vault_active)
+    logger.info("Minted %d new coins", minted)
 
     uploads = [
         CoinUpload(
@@ -479,6 +443,26 @@ def bootstrap():
         logger.info("Uploading %d coins to server", len(uploads))
         run_async(upload_coins(coin_server, USER_UUIDS[USER_ID], uploads))
         logger.info("Uploaded %d coins", len(uploads))
+
+    # Register every known contact
+    for cid in KNOWN_CONTACTS:
+        try:
+            existing = contacts_db.get_contact(cid)
+            if not existing:
+                contacts_db.add_contact(cid, cid.capitalize())
+                existing = contacts_db.get_contact(cid)
+
+            correct_priority = existing.priority if existing else "STRANGER"
+            _last_known_priority[cid] = correct_priority
+
+            # Force-set Redis meta from SQLite source of truth
+            _update_inventory_priority(cid, correct_priority)
+            # register_contact only inserts if Redis key is missing
+            inventory.register_contact(cid, correct_priority, cid.capitalize())
+
+            logger.info("Contact %s restored with priority: %s", cid, correct_priority)
+        except Exception as e:
+            logger.warning("Could not register contact %s: %s", cid, e)
 
     # Sync inventory from server for each contact
     for cid in KNOWN_CONTACTS:
@@ -510,20 +494,6 @@ def _on_priority_change(contact_id: str, new_priority: str):
         _update_inventory_priority(contact_id, new_priority)
     except Exception:
         pass
-
-    # Mint higher-tier coins now needed for the new priority level
-    new_targets = _mint_targets_for_contacts()
-    mint_needed = False
-    for tier, target in new_targets.items():
-        if _vault_active.get(tier, 0) < target:
-            mint_needed = True
-            break
-    if mint_needed:
-        try:
-            result = _do_background_mint()
-            logger.info("Post-promotion mint for %s: %s", contact_id, result)
-        except Exception as e:
-            logger.warning("Post-promotion mint failed: %s", e)
 
     # Re-sync from server with new (higher) caps
     if contact_id in USER_UUIDS:
@@ -611,12 +581,13 @@ def coin_counts(contact_id: str = None) -> dict:
 
 
 def vault_stats_dict() -> dict:
+    stats = vault.get_stats()
     return {
-        "active_gold":   _vault_active.get("GOLD", 0),
-        "active_silver": _vault_active.get("SILVER", 0),
-        "active_bronze": _vault_active.get("BRONZE", 0),
-        "total_burned":  _vault_burned,
-        "total_expired": 0,
+        "active_gold":   stats.active_gold,
+        "active_silver": stats.active_silver,
+        "active_bronze": stats.active_bronze,
+        "total_burned":  stats.total_burned,
+        "total_expired": stats.total_expired,
     }
 
 
@@ -769,11 +740,8 @@ def api_send():
             return jsonify({"error": "no coins available"}), 503
         logger.info("Coin consumed (rekey) — contact=%s tier=%s key_id=%s remaining=%s",
                     contact_id, tier, coin.key_id, coin_counts(contact_id))
-        # Track local user's coin burn for Proof-of-Burn promotion
-        burn_result = contacts_db.handle_coin_burn(contact_id, tier, is_local_user_burning=True)
-        if burn_result:
-            _on_priority_change(contact_id, burn_result)
-        ct, shared_secret = crypto.kem_encapsulate(coin.public_key, coin.coin_category)
+        with _crypto_lock:
+            ct, shared_secret = crypto.kem_encapsulate(coin.public_key, coin.coin_category)
         kem_ct = ct
         if ratchet is None:
             ratchet = SessionRatchet(contact_id, coin.coin_category, shared_secret, is_initiator=True)
@@ -783,7 +751,8 @@ def api_send():
 
     msg_key     = ratchet.derive_send_key()
     aad         = f"{USER_ID}:{contact_id}".encode()
-    enc_payload = crypto.encrypt_aead(plaintext.encode(), msg_key, aad)
+    with _crypto_lock:
+        enc_payload = crypto.encrypt_aead(plaintext.encode(), msg_key, aad)
     save_ratchet(ratchet)
 
     parcel = {
@@ -812,7 +781,7 @@ def api_send():
         "tier_color": tier_color(coin.coin_category),
         "device_ctx": parcel["device_ctx"],
         "ts":        time.time(),
-        "rekey":     coin_id_used is not None or ratchet.send_counter == 1,
+        "rekey":     coin_id_used is not None,
         "msg_count": ratchet.send_counter,
         "max_msgs":  ratchet.max_messages,
     }
@@ -865,7 +834,6 @@ def _forward_to_partner(parcel: dict, msg_record: dict, contact_id: str):
 @app.route("/api/receive", methods=["POST"])
 def api_receive():
     """Called by partner's Flask instance to deliver a message."""
-    global _vault_burned, _vault_active
     data       = request.get_json(force=True) or {}
     parcel     = data.get("parcel", {})
     msg_record = data.get("msg_record", {})
@@ -890,18 +858,17 @@ def api_receive():
                 # Key already burned (duplicate delivery) or never existed
                 logger.warning("Vault miss on receive — coin_id=%s already burned or unknown", coin_id)
             else:
-                shared_secret = crypto.kem_decapsulate(kem_ct, entry.encrypted_blob, coin_tier)
+                with _crypto_lock:
+                    shared_secret = crypto.kem_decapsulate(kem_ct, entry.encrypted_blob, coin_tier)
 
                 # ── BURN immediately — one-time key, non-negotiable ──
+                # vault.burn_key() updates Redis stats atomically
                 vault.burn_key(coin_id)
-                _vault_burned += 1
-                _vault_active[coin_tier] = max(0, _vault_active.get(coin_tier, 0) - 1)
-                logger.info("Key burned — coin_id=%s tier=%s vault_active=%s burned_total=%d",
-                    coin_id, coin_tier, _vault_active, _vault_burned)
-                # Track remote user's coin burn for Proof-of-Burn promotion
-                burn_result = contacts_db.handle_coin_burn(sender, coin_tier, is_local_user_burning=False)
-                if burn_result:
-                    _on_priority_change(sender, burn_result)
+                stats = vault.get_stats()
+                logger.info("Key burned — coin_id=%s tier=%s active=G%d/S%d/B%d burned_total=%d",
+                    coin_id, coin_tier,
+                    stats.active_gold, stats.active_silver, stats.active_bronze,
+                    stats.total_burned)
 
                 if ratchet is None:
                     ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
@@ -916,7 +883,8 @@ def api_receive():
             msg_key  = ratchet.derive_recv_key()
             aad      = f"{sender}:{USER_ID}".encode()
             enc_data = base64.b64decode(parcel["encrypted_payload"])
-            decrypted_text = crypto.decrypt_aead(enc_data, msg_key, aad).decode()
+            with _crypto_lock:
+                decrypted_text = crypto.decrypt_aead(enc_data, msg_key, aad).decode()
             save_ratchet(ratchet)
         except Exception as e:
             logger.debug("Decrypt failed, using plaintext fallback: %s", e)
@@ -931,7 +899,7 @@ def api_receive():
         "tier_color": tier_color(parcel.get("coin_tier", "BRONZE")),
         "device_ctx": parcel.get("device_ctx", {}),
         "ts":         time.time(),
-        "rekey":      "kem_ciphertext" in parcel or (ratchet is not None and ratchet.recv_counter == 1),
+        "rekey":      "kem_ciphertext" in parcel,
         "msg_count":  ratchet.recv_counter if ratchet else 0,
         "max_msgs":   ratchet.max_messages if ratchet else 0,
         "incoming":   True,
