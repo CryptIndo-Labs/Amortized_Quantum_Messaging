@@ -48,6 +48,7 @@ class SessionRatchet:
 
         self.send_counter = 0
         self.recv_counter = 0
+        self.has_sent_first = is_initiator
         self.send_chain_key = None
         self.recv_chain_key = None
 
@@ -100,6 +101,7 @@ class SessionRatchet:
         )
 
         self.send_counter += 1
+        self.has_sent_first = True
 
         return message_key
 
@@ -122,7 +124,7 @@ class SessionRatchet:
         return message_key
 
     def needs_rekey(self) -> bool:
-        if not self.is_initiator and self.send_counter == 0:
+        if not self.is_initiator and not self.has_sent_first:
             return True
         return self.send_counter >= self.max_messages
 
@@ -140,7 +142,7 @@ class SessionRatchet:
         # Reset both chains and counters
         self.send_counter = 0
         self.recv_counter = 0
-        self.has_sent_first = False
+        self.has_sent_first = is_initiator
         
         chain_a = _hkdf_derive(new_master_secret, info=b"aqm-chain-A-init")
         chain_b = _hkdf_derive(new_master_secret, info=b"aqm-chain-B-init")
@@ -152,6 +154,32 @@ class SessionRatchet:
             self.send_chain_key = chain_b
             self.recv_chain_key = chain_a
 
+    def rekey_recv_only(self, new_master_secret: bytes, new_coin_tier: str,
+                    is_initiator: bool = False) -> None:
+        """
+        Reinitialise only the receive chain from a new master secret.
+        Called when a rekey parcel is RECEIVED — the other side started a new
+        session, so we need a new recv chain, but our send chain is unaffected.
+        """
+        if new_coin_tier not in self.TIER_LIMITS:
+            raise ValueError(f"Invalid coin tier: {new_coin_tier}.")
+
+        self.coin_tier     = new_coin_tier
+        self.max_messages  = self.TIER_LIMITS[new_coin_tier]
+        self.is_initiator  = is_initiator
+        self.recv_counter  = 0
+        # Do NOT touch send_counter or has_sent_first
+
+        chain_a = _hkdf_derive(new_master_secret, info=b"aqm-chain-A-init")
+        chain_b = _hkdf_derive(new_master_secret, info=b"aqm-chain-B-init")
+
+        # Responder receives on chain-A (initiator sends on chain-A)
+        # Initiator receives on chain-B (responder sends on chain-B)
+        if is_initiator:
+            self.recv_chain_key = chain_b
+        else:
+            self.recv_chain_key = chain_a
+        
     def get_state(self) -> dict:
 
         if not self.send_chain_key:
@@ -165,6 +193,7 @@ class SessionRatchet:
             "send_chain_key": self.send_chain_key.hex(),
             "recv_chain_key": self.recv_chain_key.hex(),
             "is_initiator": self.is_initiator,
+            "has_sent_first": self.has_sent_first,
             # Legacy compat
             "msg_counter": self.send_counter,
             "current_chain_key": self.send_chain_key.hex(),
@@ -182,6 +211,7 @@ class SessionRatchet:
             ratchet.send_chain_key = bytes.fromhex(state["send_chain_key"])
             ratchet.recv_chain_key = bytes.fromhex(state["recv_chain_key"])
             ratchet.is_initiator = state.get("is_initiator", True)
+            ratchet.has_sent_first = state.get("has_sent_first", ratchet.send_counter > 0)
         else:
             # Legacy format migration: single chain becomes send chain,
             # recv chain initialized as copy (will resync on next rekey)
@@ -190,5 +220,6 @@ class SessionRatchet:
             ratchet.send_chain_key = bytes.fromhex(state["current_chain_key"])
             ratchet.recv_chain_key = bytes.fromhex(state["current_chain_key"])
             ratchet.is_initiator = state.get("is_initiator", True)
+            ratchet.has_sent_first = state.get("has_sent_first", ratchet.send_counter > 0)
 
         return ratchet
