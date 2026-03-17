@@ -151,7 +151,7 @@ USER_UUIDS: dict[str, UUID] = {
 }
 
 contacts_db      = ContactsDatabase(db_path=f"~/.aqm/{USER_ID}_contacts.db")
-session_store    = SessionStore(db_path=f"{USER_ID}_sessions.db")
+session_store = SessionStore(db_path=str(Path.home() / ".aqm" / f"{USER_ID}_sessions.db"))
 crypto           = CryptoEngine()
 _crypto_lock     = threading.Lock()   # liboqs is not thread-safe — serialize all crypto calls
 context_mgr      = ContextManager()
@@ -558,7 +558,12 @@ def get_ratchet(contact_id: str) -> SessionRatchet | None:
 
 def save_ratchet(r: SessionRatchet):
     active_ratchets[r.contact_id] = r
-    session_store.save_ratchet(r)
+    try:
+        session_store.save_ratchet(r)
+        logger.info("DEBUG: saved ratchet contact=%s send_counter=%d has_sent_first=%s", 
+                    r.contact_id, r.send_counter, r.has_sent_first)
+    except Exception as e:
+        logger.error("SAVE RATCHET FAILED: %s", e, exc_info=True)
 
 
 def tier_color(tier: str) -> str:
@@ -873,7 +878,7 @@ def api_receive():
                 if ratchet is None:
                     ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
                 else:
-                    ratchet.rekey(shared_secret, coin_tier, is_initiator=False)
+                    ratchet.rekey_recv_only(shared_secret, coin_tier, is_initiator=False)
 
         except Exception as e:
             logger.warning("KEM decap failed: %s", e)
@@ -885,9 +890,9 @@ def api_receive():
             enc_data = base64.b64decode(parcel["encrypted_payload"])
             with _crypto_lock:
                 decrypted_text = crypto.decrypt_aead(enc_data, msg_key, aad).decode()
-            save_ratchet(ratchet)
         except Exception as e:
             logger.debug("Decrypt failed, using plaintext fallback: %s", e)
+        save_ratchet(ratchet)
 
     # Build incoming message record
     incoming = {
