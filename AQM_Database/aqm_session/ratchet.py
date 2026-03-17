@@ -121,9 +121,17 @@ class SessionRatchet:
 
         return message_key
 
+    # def needs_rekey(self) -> bool:
+    #     """Rekey based on send counter only."""
+    #     return self.send_counter >= self.max_messages
+
     def needs_rekey(self) -> bool:
-        """Rekey based on send counter only."""
-        return self.send_counter >= self.max_messages
+    """Rekey based on send counter only.
+    Responder must also rekey on their very first send to establish
+    their own coin — ensures burns happen on both sides."""
+    if not self.is_initiator and self.send_counter == 0:
+        return True
+    return self.send_counter >= self.max_messages
 
     def rekey(self, new_master_secret: bytes, new_coin_tier: str,
               is_initiator: bool = True) -> None:
