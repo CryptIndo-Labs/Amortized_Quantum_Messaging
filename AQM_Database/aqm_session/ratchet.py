@@ -28,9 +28,9 @@ class SessionRatchet:
 
     # Dynamic Tier-Based Limits for Amortization
     TIER_LIMITS = {
-        "GOLD": 250,
-        "SILVER": 150,
-        "BRONZE": 75
+        "GOLD": 25,
+        "SILVER": 10,
+        "BRONZE": 5
     }
 
     def __init__(self, contact_id: str, coin_tier: str, master_secret: bytes = None,
