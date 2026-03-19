@@ -631,6 +631,8 @@ def contacts_list() -> list[dict]:
                 "msg_count_30d":  c.msg_count_30d,
                 "is_blocked":     bool(c.is_blocked),
                 "last_msg_at":    str(c.last_msg_at) if c.last_msg_at else None,
+                "my_burn_count":   getattr(c, "my_burn_count", 0),
+                "their_burn_count": getattr(c, "their_burn_count", 0),
                 "coins": {
                     "gold":   inv_summary.gold_count   if inv_summary else 0,
                     "silver": inv_summary.silver_count if inv_summary else 0,
@@ -753,6 +755,11 @@ def api_send():
         else:
             ratchet.rekey(shared_secret, coin.coin_category, is_initiator=True)
         coin_id_used = coin.key_id
+        # Record my burn — I just consumed their public key (rekey send)
+        try:
+            contacts_db.record_burn(contact_id, "mine")
+        except Exception:
+            pass
 
     msg_key     = ratchet.derive_send_key()
     aad         = f"{USER_ID}:{contact_id}".encode()
@@ -874,6 +881,12 @@ def api_receive():
                     coin_id, coin_tier,
                     stats.active_gold, stats.active_silver, stats.active_bronze,
                     stats.total_burned)
+
+                # Record their burn — they consumed my public key (rekey receive)
+                try:
+                    contacts_db.record_burn(sender, "theirs")
+                except Exception:
+                    pass
 
                 if ratchet is None:
                     ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
