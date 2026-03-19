@@ -164,9 +164,6 @@ class SessionRatchet:
         if new_coin_tier not in self.TIER_LIMITS:
             raise ValueError(f"Invalid coin tier: {new_coin_tier}.")
 
-        self.coin_tier     = new_coin_tier
-        self.max_messages  = self.TIER_LIMITS[new_coin_tier]
-        self.is_initiator  = is_initiator
         self.recv_counter  = 0
         # Do NOT touch send_counter or has_sent_first
 
