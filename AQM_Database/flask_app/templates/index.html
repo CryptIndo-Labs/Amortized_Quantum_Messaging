@@ -580,7 +580,10 @@
       document.getElementById("contacts-count").textContent = `${contacts.length} PEER${contacts.length!==1?"S":""}`;
       if (!contacts.length) { list.innerHTML=`<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-text">NO CONTACTS</div></div>`; return; }
       list.innerHTML = contacts.map(c => {
-        const bp = Math.min(100,(c.msg_count_7d/20)*100), mp = Math.min(100,(c.msg_count_30d/10)*100);
+        const myB = c.my_burn_count || 0, theirB = c.their_burn_count || 0;
+        const bothBurns = Math.min(myB, theirB);
+        const targetBurns = c.priority === "STRANGER" ? 2 : 3;
+        const burnPct = Math.min(100, (bothBurns / targetBurns) * 100);
         const lock = c.priority_locked?"🔒":"", np = getNextPromo(c);
         return `<div class="contact-card priority-${c.priority} ${c.contact_id===activeContact?'active':''}" onclick="selectContact('${c.contact_id}')">
           <div class="contact-name">${c.display_name} ${lock}</div>
@@ -591,8 +594,11 @@
           </div>
           <div class="contact-coins"><span class="mini-coin g">G:${c.coins.gold}</span><span class="mini-coin s">S:${c.coins.silver}</span><span class="mini-coin b">B:${c.coins.bronze}</span></div>
           ${c.priority!=="BESTIE"?`<div class="threshold-bar">
-            ${c.priority==="STRANGER"?`<div class="threshold-label"><span>MATE</span><span>${c.msg_count_30d}/10 (30d)</span></div><div class="bar-track"><div class="bar-fill mate" style="width:${mp}%"></div></div>`:""}
-            <div class="threshold-label"><span>BESTIE</span><span>${c.msg_count_7d}/20 (7d)</span></div><div class="bar-track"><div class="bar-fill bestie" style="width:${bp}%"></div></div>
+            <div class="threshold-label">
+              <span>${c.priority==="STRANGER"?"→ MATE":"→ BESTIE"}</span>
+              <span>🔥 me:${myB} them:${theirB} / ${targetBurns}</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill ${c.priority==="STRANGER"?"mate":"bestie"}" style="width:${burnPct}%"></div></div>
           </div>`:""}
         </div>`;
       }).join("");
@@ -600,8 +606,9 @@
 
     function getNextPromo(c) {
       if (c.priority==="BESTIE") return null;
-      if (c.priority==="MATE")     return c.msg_count_7d>=16?"BESTIE SOON":null;
-      if (c.priority==="STRANGER") return c.msg_count_30d>=8?"MATE SOON":null;
+      const both = Math.min(c.my_burn_count || 0, c.their_burn_count || 0);
+      if (c.priority==="MATE")     return both >= 2 ? "BESTIE SOON" : null;
+      if (c.priority==="STRANGER") return both >= 1 ? "MATE SOON"   : null;
       return null;
     }
 
