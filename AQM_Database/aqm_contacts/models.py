@@ -13,7 +13,5 @@ class Contact:
     msg_count_30d: int
     priority_locked: bool
     is_blocked: bool
-    my_burned_bronze: int = 0
-    their_burned_bronze: int = 0
-    my_burned_silver: int = 0
-    their_burned_silver: int = 0
+    my_burn_count: int = 0    # coins I burned sending to this contact (rekeys I initiated)
+    their_burn_count: int = 0 # coins they burned sending to me (rekeys they initiated)
