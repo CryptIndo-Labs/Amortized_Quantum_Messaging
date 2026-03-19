@@ -35,7 +35,7 @@ services:
     command: >
       python -m AQM_Database.flask_app.app
       --user biprarshi --port 5000 --host 0.0.0.0
-      --contacts protyasha shirsa subhamoy samrat padma shreejith --contact-ports 5001 5002 5003 5004 5005 5006
+      --contacts shirsa protyasha --contact-ports 5001 5002
     depends_on:
       - coin-server
     environment:
@@ -45,29 +45,13 @@ services:
       AQM_PASSWORD: "${AQM_BIPRARSHI_PASSWORD:-aqm-demo-2026}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_BIPRARSHI:-change-me-biprarshi}"
 
-  protyasha:
-    build: .
-    restart: unless-stopped
-    command: >
-      python -m AQM_Database.flask_app.app
-      --user protyasha --port 5001 --host 0.0.0.0
-      --contacts biprarshi shirsa subhamoy samrat padma shreejith --contact-ports 5000 5002 5003 5004 5005 5006
-    depends_on:
-      - coin-server
-    environment:
-      REDIS_HOST: redis
-      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
-      AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_PROTYASHA_PASSWORD:-aqm-demo-2026}"
-      FLASK_SECRET_KEY: "${FLASK_SECRET_PROTYASHA:-change-me-protyasha}"
-
   shirsa:
     build: .
     restart: unless-stopped
     command: >
       python -m AQM_Database.flask_app.app
-      --user shirsa --port 5002 --host 0.0.0.0
-      --contacts biprarshi protyasha subhamoy samrat padma shreejith --contact-ports 5000 5001 5003 5004 5005 5006
+      --user shirsa --port 5001 --host 0.0.0.0
+      --contacts biprarshi protyasha --contact-ports 5000 5002
     depends_on:
       - coin-server
     environment:
@@ -77,69 +61,21 @@ services:
       AQM_PASSWORD: "${AQM_SHIRSA_PASSWORD:-aqm-demo-2026}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_SHIRSA:-change-me-shirsa}"
 
-  subhamoy:
+  protyasha:
     build: .
     restart: unless-stopped
     command: >
       python -m AQM_Database.flask_app.app
-      --user subhamoy --port 5003 --host 0.0.0.0
-      --contacts biprarshi protyasha shirsa samrat padma shreejith --contact-ports 5000 5001 5002 5004 5005 5006
+      --user protyasha --port 5002 --host 0.0.0.0
+      --contacts biprarshi shirsa --contact-ports 5000 5001
     depends_on:
       - coin-server
     environment:
       REDIS_HOST: redis
       PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
       AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_SUBHAMOY_PASSWORD:-aqm-demo-2026}"
-      FLASK_SECRET_KEY: "${FLASK_SECRET_SUBHAMOY:-change-me-subhamoy}"
-
-  samrat:
-    build: .
-    restart: unless-stopped
-    command: >
-      python -m AQM_Database.flask_app.app
-      --user samrat --port 5004 --host 0.0.0.0
-      --contacts biprarshi protyasha shirsa subhamoy padma shreejith --contact-ports 5000 5001 5002 5003 5005 5006
-    depends_on:
-      - coin-server
-    environment:
-      REDIS_HOST: redis
-      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
-      AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_SAMRAT_PASSWORD:-aqm-demo-2026}"
-      FLASK_SECRET_KEY: "${FLASK_SECRET_SAMRAT:-change-me-samrat}"
-
-  padma:
-    build: .
-    restart: unless-stopped
-    command: >
-      python -m AQM_Database.flask_app.app
-      --user padma --port 5005 --host 0.0.0.0
-      --contacts biprarshi protyasha shirsa subhamoy samrat shreejith --contact-ports 5000 5001 5002 5003 5004 5006
-    depends_on:
-      - coin-server
-    environment:
-      REDIS_HOST: redis
-      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
-      AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_PADMA_PASSWORD:-aqm-demo-2026}"
-      FLASK_SECRET_KEY: "${FLASK_SECRET_PADMA:-change-me-padma}"
-
-  shreejith:
-    build: .
-    restart: unless-stopped
-    command: >
-      python -m AQM_Database.flask_app.app
-      --user shreejith --port 5006 --host 0.0.0.0
-      --contacts biprarshi protyasha shirsa subhamoy samrat padma --contact-ports 5000 5001 5002 5003 5004 5005
-    depends_on:
-      - coin-server
-    environment:
-      REDIS_HOST: redis
-      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
-      AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_SHREEJITH_PASSWORD:-aqm-demo-2026}"
-      FLASK_SECRET_KEY: "${FLASK_SECRET_SHREEJITH:-change-me-shreejith}"
+      AQM_PASSWORD: "${AQM_PROTYASHA_PASSWORD:-aqm-demo-2026}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_PROTYASHA:-change-me-protyasha}"
 
   caddy:
     image: caddy:2-alpine

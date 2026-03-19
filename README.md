@@ -13,10 +13,6 @@ The chat is running at [cryptindo-aqm.org](https://cryptindo-aqm.org) on a Digit
 | biprarshi | https://biprarshi.cryptindo-aqm.org | `biprarshi` |
 | protyasha | https://protyasha.cryptindo-aqm.org | `protyasha` |
 | shirsa | https://shirsa.cryptindo-aqm.org | `shirsa` |
-| subhamoy | https://subhamoy.cryptindo-aqm.org | `subhamoy` |
-| samrat | https://samrat.cryptindo-aqm.org | `samrat` |
-| padma | https://padma.cryptindo-aqm.org | `padma` |
-| shreejith | https://shreejith.cryptindo-aqm.org | `shreejith` |
 
 Open your URL in a browser, enter your password, and start messaging.
 
@@ -52,21 +48,21 @@ Each coin is a public/private keypair. The sender uses the receiver's public key
 ┌─────────────────────────────────────────────────────────┐
 │                     Flask Web UI                        │
 │  (Per-user instance — one container per user)           │
-└────────────────┬───────────────────┬────────────────────┘
-                 │                   │
-    ┌────────────▼──────┐   ┌────────▼──────────┐
-    │   SecureVault     │   │  SmartInventory   │
-    │  (Redis — local)  │   │  (Redis — local)  │
-    │  Own private keys │   │  Partner pub keys │
-    │  Burn on decrypt  │   │  Budget-capped    │
-    └───────────────────┘   └────────┬──────────┘
-                                     │ sync
-                            ┌────────▼──────────┐
-                            │  CoinInventory    │
-                            │  Server (FastAPI) │
-                            │  PostgreSQL 16    │
-                            │  Delete-on-Fetch  │
-                            └───────────────────┘
+└────────┬───────────────┬───────────────┬────────────────┘
+         │               │               │
+┌────────▼──────┐ ┌──────▼────────┐ ┌────▼──────────────┐
+│  SecureVault  │ │ SmartInventory│ │  Contacts DB      │
+│ (Redis—local) │ │ (Redis—local) │ │  (SQLite—local)   │
+│ Own priv keys │ │ Partner pubs  │ │  Priority/history │
+│ Burn on use   │ │ Budget-capped │ │  Burn counters    │
+└───────────────┘ └──────┬────────┘ └───────────────────┘
+                         │ sync
+                ┌────────▼──────────┐
+                │  CoinInventory    │
+                │  Server (FastAPI) │
+                │  PostgreSQL 16    │
+                │  Delete-on-Fetch  │
+                └───────────────────┘
 ```
 
 ---
