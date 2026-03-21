@@ -512,6 +512,30 @@ def _on_priority_change(contact_id: str, new_priority: str):
 
 bootstrap()
 
+# ── Group Chat Blueprint ─────────────────────────────────────────────────────
+from AQM_Database.flask_app.group_routes import group_bp, init_group_routes
+from AQM_Database.aqm_group.group_db import GroupDatabase
+from AQM_Database.aqm_group.hot_edge import HotEdgeTracker
+
+_group_db = GroupDatabase(db_path=f"~/.aqm/{USER_ID}_groups.db")
+_group_vault_key = os.urandom(32)
+_group_hot_edge = HotEdgeTracker(_group_db, crypto, _group_vault_key)
+init_group_routes(
+    user_id=USER_ID,
+    group_db=_group_db,
+    contacts_db=contacts_db,
+    inventory=inventory,
+    vault=vault,
+    crypto=crypto,
+    crypto_lock=_crypto_lock,
+    hot_edge_tracker=_group_hot_edge,
+    sse_queue=sse_queue,
+    known_contacts=KNOWN_CONTACTS,
+    login_required_decorator=login_required,
+    contact_ports=CONTACT_PORTS,
+)
+app.register_blueprint(group_bp)
+
 def _background_sync():
     """Retry inventory sync for any contact still showing 0 coins."""
     while True:

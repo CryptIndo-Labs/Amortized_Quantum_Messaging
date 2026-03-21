@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AQM Group Chat — {{ user_id }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #e0e0e0; }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        h1 { color: #00ff88; margin-bottom: 20px; }
+        .section { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .section h2 { color: #00aaff; font-size: 14px; margin-bottom: 10px; }
+        input, select, button { font-family: inherit; padding: 8px 12px; border: 1px solid #444; background: #222; color: #e0e0e0; border-radius: 4px; }
+        button { background: #00ff88; color: #0a0a0a; cursor: pointer; font-weight: bold; }
+        button:hover { background: #00cc66; }
+        .msg { padding: 8px; margin: 4px 0; border-left: 3px solid #444; background: #151515; }
+        .msg.sent { border-left-color: #00ff88; }
+        .msg.received { border-left-color: #00aaff; }
+        .msg .sender { font-weight: bold; color: #888; font-size: 12px; }
+        .msg .text { margin-top: 4px; }
+        .group-list { list-style: none; }
+        .group-list li { padding: 8px; margin: 4px 0; background: #151515; border-radius: 4px; cursor: pointer; }
+        .group-list li:hover { background: #252525; }
+        .group-list li.active { border-left: 3px solid #00ff88; }
+        #status { color: #888; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AQM Group Chat — {{ user_id }}</h1>
+        <p id="status">Loading...</p>
+
+        <div class="section">
+            <h2>CREATE GROUP</h2>
+            <form id="createForm">
+                <input type="text" id="groupName" placeholder="Group name" style="width: 200px;">
+                <select id="memberSelect" multiple style="width: 200px; height: 60px;">
+                    {% for c in known_contacts %}
+                    <option value="{{ c }}">{{ c }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">Create</button>
+            </form>
+        </div>
+
+        <div class="section">
+            <h2>GROUPS</h2>
+            <ul class="group-list" id="groupList"></ul>
+        </div>
+
+        <div class="section" id="chatSection" style="display: none;">
+            <h2 id="chatHeader">Chat</h2>
+            <div id="messages" style="max-height: 400px; overflow-y: auto; margin-bottom: 10px;"></div>
+            <form id="sendForm">
+                <input type="text" id="messageInput" placeholder="Type a message..." style="width: 70%;">
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let currentGroupId = null;
+
+        document.getElementById('createForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('groupName').value.trim();
+            const select = document.getElementById('memberSelect');
+            const members = Array.from(select.selectedOptions).map(o => o.value);
+            if (!name || members.length === 0) return;
+
+            const res = await fetch('/group/api/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, members}),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                document.getElementById('groupName').value = '';
+                loadGroups();
+            } else {
+                alert(data.error || 'Failed to create group');
+            }
+        });
+
+        document.getElementById('sendForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentGroupId) return;
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            const res = await fetch('/group/api/send', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({group_id: currentGroupId, message}),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                input.value = '';
+                loadMessages(currentGroupId);
+            }
+        });
+
+        async function loadGroups() {
+            const res = await fetch('/group/api/groups');
+            const data = await res.json();
+            const list = document.getElementById('groupList');
+            list.innerHTML = '';
+            for (const g of data.groups) {
+                const li = document.createElement('li');
+                li.textContent = `${g.name} (${g.my_role})`;
+                li.dataset.groupId = g.group_id;
+                if (g.group_id === currentGroupId) li.classList.add('active');
+                li.addEventListener('click', () => selectGroup(g.group_id, g.name));
+                list.appendChild(li);
+            }
+            document.getElementById('status').textContent = `${data.groups.length} groups`;
+        }
+
+        function selectGroup(groupId, name) {
+            currentGroupId = groupId;
+            document.getElementById('chatSection').style.display = '';
+            document.getElementById('chatHeader').textContent = name;
+            loadGroups();
+            loadMessages(groupId);
+        }
+
+        async function loadMessages(groupId) {
+            const res = await fetch(`/group/api/groups/${groupId}/messages`);
+            const data = await res.json();
+            const container = document.getElementById('messages');
+            container.innerHTML = '';
+            for (const m of data.messages.reverse()) {
+                const div = document.createElement('div');
+                div.className = `msg ${m.sender_id === '{{ user_id }}' ? 'sent' : 'received'}`;
+                div.innerHTML = `<div class="sender">${m.sender_id}${m.hot_path ? ' ⚡' : ''}</div><div class="text">${m.plaintext}</div>`;
+                container.appendChild(div);
+            }
+            container.scrollTop = container.scrollHeight;
+        }
+
+        loadGroups();
+    </script>
+</body>
+</html>

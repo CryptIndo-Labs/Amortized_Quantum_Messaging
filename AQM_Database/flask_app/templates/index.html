@@ -1242,6 +1242,55 @@
       }
     }
 
+    /* ── Group Chat Tab ── */
+    .grp-tab-bar{display:flex;gap:0;margin-right:auto}
+    .grp-tab{font-family:var(--font-mono);font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:4px 12px;cursor:pointer;border:1px solid transparent;border-radius:14px;color:var(--text-muted);transition:all .2s;font-weight:600;background:none}
+    .grp-tab:hover{color:var(--text-dim);background:rgba(160,210,255,0.12)}
+    .grp-tab.active{color:var(--accent-teal);background:rgba(33,150,200,0.12);border-color:rgba(33,150,200,0.3)}
+    .grp-list{flex:1;overflow-y:scroll;padding:8px;display:none}
+    .grp-card{background:rgba(255,255,255,0.55);border:1px solid rgba(160,210,255,0.35);border-radius:8px;padding:12px;margin-bottom:6px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;backdrop-filter:blur(6px)}
+    .grp-card:hover{border-color:rgba(100,180,240,0.55);background:rgba(220,238,255,0.65);box-shadow:0 2px 12px rgba(80,160,240,0.1);transform:translateY(-1px)}
+    .grp-card.active{border-color:var(--accent-teal);background:rgba(33,150,200,0.1);box-shadow:0 0 0 1px rgba(33,150,200,0.2),0 2px 12px rgba(33,150,200,0.1)}
+    .grp-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:3px 0 0 3px;background:var(--accent-teal)}
+    .grp-name{font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:4px;display:flex;align-items:center;gap:6px}
+    .grp-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+    .grp-meta{font-family:var(--font-mono);font-size:9px;color:var(--text-dim);display:flex;gap:8px}
+    .grp-role{font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:1.5px;padding:2px 7px;border-radius:20px;text-transform:uppercase;color:var(--accent-teal);background:rgba(33,150,200,0.1);border:1px solid rgba(33,150,200,0.25)}
+    .grp-new-btn{width:100%;padding:8px;margin-bottom:8px;border:1px dashed rgba(33,150,200,0.4);border-radius:8px;background:rgba(33,150,200,0.06);color:var(--accent-teal);font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:2px;cursor:pointer;text-transform:uppercase;transition:all .2s;text-align:center}
+    .grp-new-btn:hover{background:rgba(33,150,200,0.14);border-color:var(--accent-teal)}
+    .grp-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);z-index:999;display:none;align-items:center;justify-content:center}
+    .grp-modal-overlay.visible{display:flex}
+    .grp-modal{background:var(--grad-panel);backdrop-filter:var(--glass-blur);border:1px solid rgba(160,210,255,0.5);border-radius:12px;padding:24px;width:340px;box-shadow:0 8px 40px rgba(80,140,200,0.2)}
+    .grp-modal-title{font-family:var(--font-mono);font-size:11px;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase;margin-bottom:16px;font-weight:600}
+    .grp-modal input[type="text"]{width:100%;padding:10px 14px;border:1px solid rgba(140,200,240,0.45);border-radius:8px;background:rgba(255,255,255,0.65);color:var(--text-primary);font-family:var(--font-mono);font-size:13px;margin-bottom:12px;outline:none;transition:border-color .2s}
+    .grp-modal input[type="text"]:focus{border-color:var(--accent-teal)}
+    .grp-modal-members{max-height:180px;overflow-y:auto;margin-bottom:16px;display:flex;flex-direction:column;gap:4px}
+    .grp-modal-member{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;cursor:pointer;transition:background .15s;font-family:var(--font-mono);font-size:12px;color:var(--text-primary)}
+    .grp-modal-member:hover{background:rgba(160,210,255,0.15)}
+    .grp-modal-member input[type="checkbox"]{accent-color:var(--accent-teal)}
+    .grp-modal-actions{display:flex;gap:8px;justify-content:flex-end}
+    .grp-modal-actions button{padding:8px 18px;border-radius:20px;font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:1px;cursor:pointer;border:1px solid;transition:all .2s}
+    .grp-btn-cancel{background:transparent;border-color:rgba(160,210,255,0.4);color:var(--text-dim)}
+    .grp-btn-cancel:hover{background:rgba(160,210,255,0.1)}
+    .grp-btn-create{background:linear-gradient(135deg,#2196c8 0%,#1565a8 100%);border-color:transparent;color:white;box-shadow:0 2px 10px rgba(33,150,200,0.3)}
+    .grp-btn-create:hover{box-shadow:0 4px 16px rgba(33,150,200,0.4);transform:translateY(-1px)}
+    .grp-msg-sender{font-family:var(--font-mono);font-size:9px;color:var(--accent-teal);letter-spacing:1px;text-transform:uppercase;margin-bottom:2px}
+    .grp-hot-icon{color:var(--warn);font-size:10px}
+    .grp-members-section{display:none;margin-top:8px;border-top:1px solid var(--border);padding-top:10px}
+    .grp-members-section.visible{display:block}
+    .grp-members-title{font-family:var(--font-mono);font-size:9px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;font-weight:600}
+    .grp-member-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;transition:background .15s}
+    .grp-member-row:hover{background:rgba(160,210,255,0.1)}
+    .grp-member-avatar{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:10px;font-weight:700;color:white;flex-shrink:0}
+    .grp-member-avatar.bestie{background:linear-gradient(135deg,var(--gold),#d4a800)}
+    .grp-member-avatar.mate{background:linear-gradient(135deg,var(--silver),#6a9ab8)}
+    .grp-member-avatar.stranger{background:linear-gradient(135deg,var(--bronze),#a06020)}
+    .grp-member-name{font-family:var(--font-mono);font-size:11px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .grp-member-tier{font-family:var(--font-mono);font-size:8px;letter-spacing:1px;padding:2px 6px;border-radius:10px;text-transform:uppercase;font-weight:600}
+    .grp-member-tier.bestie{color:var(--gold-dim);background:var(--gold-glow);border:1px solid rgba(232,184,0,0.3)}
+    .grp-member-tier.mate{color:var(--silver-dim);background:var(--silver-glow);border:1px solid rgba(136,184,216,0.3)}
+    .grp-member-tier.stranger{color:var(--bronze-dim);background:var(--bronze-glow);border:1px solid rgba(200,120,48,0.3)}
+
     /* Misc */
     .empty-state {
       flex: 1;
@@ -1400,7 +1449,10 @@
 
     <aside class="panel contacts-panel">
       <div class="panel-header">
-        <span class="panel-header-title">Contacts</span>
+        <div class="grp-tab-bar">
+          <span class="grp-tab active" id="tab-direct" onclick="switchTab('direct')">Direct</span>
+          <span class="grp-tab" id="tab-groups" onclick="switchTab('groups')">Groups</span>
+        </div>
         <span class="panel-header-badge" id="contacts-count">0 PEERS</span>
       </div>
       <div class="contacts-list" id="contacts-list">
@@ -1408,6 +1460,10 @@
           <div class="empty-icon">👥</div>
           <div class="empty-text">NO CONTACTS</div>
         </div>
+      </div>
+      <div class="grp-list" id="grp-list">
+        <button class="grp-new-btn" onclick="openNewGroupModal()">+ New Group</button>
+        <div id="grp-cards"></div>
       </div>
     </aside>
 
@@ -1547,8 +1603,27 @@
           </div>
         </div>
 
+        <!-- Group Members (visible in group mode) -->
+        <div class="grp-members-section" id="grp-members-section">
+          <div class="grp-members-title">Group Members <span id="grp-members-count"></span></div>
+          <div id="grp-members-list"></div>
+        </div>
+
       </div>
     </aside>
+  </div>
+
+  <div class="grp-modal-overlay" id="grp-modal">
+    <div class="grp-modal">
+      <div class="grp-modal-title">New Group</div>
+      <input type="text" id="grp-modal-name" placeholder="Group name...">
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-bottom:6px">SELECT MEMBERS</div>
+      <div class="grp-modal-members" id="grp-modal-members"></div>
+      <div class="grp-modal-actions">
+        <button class="grp-btn-cancel" onclick="closeNewGroupModal()">Cancel</button>
+        <button class="grp-btn-create" onclick="createGroup()">Create</button>
+      </div>
+    </div>
   </div>
 
   <div class="toast-container" id="toasts"></div>
@@ -1566,6 +1641,11 @@
     let sseSource = null;
     let _mintState = {};
     let _cooldownTimer = null;
+    // Group state (declared early for SSE handler)
+    let _grpMode = false;
+    let _activeGroupId = null;
+    let _activeGroupName = null;
+    let _grpPollTimer = null;
 
     // ── SSE ──────────────────────────────────────────────────────────
     function connectSSE() {
@@ -1586,6 +1666,8 @@
           if (data.minting) updateMinting(data.minting);
         } else if (data.type === "context_update") {
           updateDeviceContext(data.ctx);
+        } else if (data.type === "group_message") {
+          if (_grpMode && _activeGroupId) loadGroupMessages(_activeGroupId);
         } else if (data.type === "mint_update") {
           handleMintUpdate(data);
         }
@@ -1872,6 +1954,7 @@
     function scrollBottom(force = false) { const c = document.getElementById("messages"); if (force || isNearBottom()) c.scrollTop = c.scrollHeight; }
 
     async function sendMessage() {
+      if (_grpMode && _activeGroupId) { return sendGroupMessage(); }
       const input = document.getElementById("msg-input"), text = input.value.trim();
       if (!text) return;
       const btn = document.getElementById("send-btn"); btn.disabled = true; input.value = ""; autoResize(input);
@@ -1898,9 +1981,215 @@
     document.getElementById("msg-input").addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
     setInterval(loadStatus, 5000);
-    setInterval(() => loadHistory(activeContact, false), 8000);
+    setInterval(() => { if (!_grpMode) loadHistory(activeContact, false); }, 8000);
     startCooldownTick();
     connectSSE();
+
+    // ── Group Chat ────────────────────────────────────────────────────
+    function switchTab(tab) {
+      const directTab = document.getElementById("tab-direct");
+      const groupsTab = document.getElementById("tab-groups");
+      const contactsList = document.getElementById("contacts-list");
+      const grpList = document.getElementById("grp-list");
+      const badge = document.getElementById("contacts-count");
+
+      if (tab === "groups") {
+        _grpMode = true;
+        directTab.classList.remove("active");
+        groupsTab.classList.add("active");
+        contactsList.style.display = "none";
+        grpList.style.display = "block";
+        loadGroupList();
+        if (_activeGroupId) {
+          showGroupChat(_activeGroupId, _activeGroupName);
+        }
+      } else {
+        _grpMode = false;
+        groupsTab.classList.remove("active");
+        directTab.classList.add("active");
+        grpList.style.display = "none";
+        contactsList.style.display = "block";
+        if (_grpPollTimer) { clearInterval(_grpPollTimer); _grpPollTimer = null; }
+        document.getElementById("grp-members-section").classList.remove("visible");
+        loadStatus(); // refresh contact count badge
+        // Restore direct chat header
+        document.getElementById("chat-partner").textContent = activeContact.toUpperCase();
+        document.querySelector(".chat-panel .panel-header-title").textContent = "Secure Channel";
+        loadHistory(activeContact, true);
+      }
+    }
+
+    async function loadGroupList() {
+      try {
+        const r = await fetch("/group/api/groups");
+        if (r.status === 401) { window.location.href = "/login"; return; }
+        const d = await r.json();
+        const container = document.getElementById("grp-cards");
+        const badge = document.getElementById("contacts-count");
+        badge.textContent = `${d.groups.length} GROUP${d.groups.length !== 1 ? "S" : ""}`;
+        if (!d.groups.length) {
+          container.innerHTML = `<div class="empty-state" style="padding:40px 0"><div class="empty-icon">💬</div><div class="empty-text">NO GROUPS YET</div></div>`;
+          return;
+        }
+        container.innerHTML = d.groups.map(g => `
+          <div class="grp-card ${g.group_id === _activeGroupId ? 'active' : ''}" onclick="selectGroup('${g.group_id}', '${escapeHtml(g.name)}')">
+            <div class="grp-name">
+              <span class="grp-dot" style="background:var(--accent-teal);box-shadow:0 0 6px var(--accent-teal)"></span>
+              ${escapeHtml(g.name)}
+            </div>
+            <div class="grp-meta">
+              <span class="grp-role">${g.my_role}</span>
+            </div>
+          </div>
+        `).join("");
+      } catch(e) { console.warn("loadGroupList error:", e); }
+    }
+
+    function selectGroup(groupId, name) {
+      _activeGroupId = groupId;
+      _activeGroupName = name;
+      showGroupChat(groupId, name);
+      loadGroupList(); // refresh active highlight
+    }
+
+    function showGroupChat(groupId, name) {
+      // Update chat header
+      const headerTitle = document.querySelector(".chat-panel .panel-header-title");
+      const headerBadge = document.getElementById("chat-partner");
+      headerTitle.textContent = "Group";
+      headerBadge.textContent = name.toUpperCase();
+      loadGroupMessages(groupId);
+      loadGroupMembers(groupId);
+      // Poll for new messages
+      if (_grpPollTimer) clearInterval(_grpPollTimer);
+      _grpPollTimer = setInterval(() => loadGroupMessages(groupId), 4000);
+    }
+
+    async function loadGroupMessages(groupId) {
+      try {
+        const r = await fetch(`/group/api/groups/${groupId}/messages`);
+        if (r.status === 401) { window.location.href = "/login"; return; }
+        const d = await r.json();
+        const c = document.getElementById("messages");
+        const wasAtBottom = isNearBottom();
+        c.innerHTML = "";
+        if (!d.messages || !d.messages.length) {
+          c.innerHTML = `<div class="empty-state"><div class="empty-icon">💬</div><div class="empty-text">NO MESSAGES YET<br>SEND ONE!</div></div>`;
+          return;
+        }
+        d.messages.reverse().forEach(m => {
+          const isOut = m.sender_id === USER_ID;
+          const tier = m.tier_used || "BRONZE";
+          const row = document.createElement("div");
+          row.className = `message-row ${isOut ? "outgoing" : "incoming"}`;
+          row.innerHTML = `
+            ${!isOut ? `<div class="grp-msg-sender">${escapeHtml(m.sender_id.slice(0,8))}</div>` : ""}
+            <div class="message-bubble">
+              <div class="message-tier-bar" style="background:${TIER_COLORS[tier] || '#888'}"></div>
+              <div style="padding-left:8px">${escapeHtml(m.plaintext)}</div>
+            </div>
+            <div class="message-meta">
+              <span class="msg-sender">${m.sender_id}</span>
+              <span class="msg-tier-badge ${tier}">${tier}</span>
+              ${m.hot_path ? '<span class="grp-hot-icon">⚡</span>' : ""}
+            </div>`;
+          c.appendChild(row);
+        });
+        if (wasAtBottom) scrollBottom(true);
+      } catch(e) { console.warn("loadGroupMessages error:", e); }
+    }
+
+    async function sendGroupMessage() {
+      const input = document.getElementById("msg-input"), text = input.value.trim();
+      if (!text) return;
+      const btn = document.getElementById("send-btn");
+      btn.disabled = true; input.value = ""; autoResize(input);
+      try {
+        const r = await fetch("/group/api/send", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({group_id: _activeGroupId, message: text}),
+        });
+        if (r.status === 401) { window.location.href = "/login"; return; }
+        const d = await r.json();
+        if (d.ok) {
+          loadGroupMessages(_activeGroupId);
+        } else {
+          showToast("Error: " + (d.error || "Send failed"));
+        }
+      } catch(e) { showToast("Group send failed"); }
+      finally { btn.disabled = false; input.focus(); }
+    }
+
+    // New Group Modal
+    function openNewGroupModal() {
+      const modal = document.getElementById("grp-modal");
+      const membersDiv = document.getElementById("grp-modal-members");
+      document.getElementById("grp-modal-name").value = "";
+      membersDiv.innerHTML = KNOWN_CONTACTS.map(c => `
+        <label class="grp-modal-member">
+          <input type="checkbox" value="${c}"> ${c}
+        </label>
+      `).join("");
+      modal.classList.add("visible");
+    }
+
+    function closeNewGroupModal() {
+      document.getElementById("grp-modal").classList.remove("visible");
+    }
+
+    async function createGroup() {
+      const name = document.getElementById("grp-modal-name").value.trim();
+      const checks = document.querySelectorAll("#grp-modal-members input:checked");
+      const members = Array.from(checks).map(c => c.value);
+      if (!name) { showToast("Enter a group name"); return; }
+      if (!members.length) { showToast("Select at least one member"); return; }
+      try {
+        const r = await fetch("/group/api/create", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({name, members}),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          closeNewGroupModal();
+          showToast(`Group "${name}" created`);
+          await loadGroupList();
+          selectGroup(d.group.group_id, d.group.name);
+        } else {
+          showToast("Error: " + (d.error || "Create failed"));
+        }
+      } catch(e) { showToast("Create group failed"); }
+    }
+
+    async function loadGroupMembers(groupId) {
+      const section = document.getElementById("grp-members-section");
+      const list = document.getElementById("grp-members-list");
+      const countEl = document.getElementById("grp-members-count");
+      if (!groupId) { section.classList.remove("visible"); return; }
+      try {
+        const r = await fetch(`/group/api/groups/${groupId}/members`);
+        if (r.status === 401) return;
+        const d = await r.json();
+        const members = d.members || [];
+        countEl.textContent = `(${members.length})`;
+        list.innerHTML = members.map(m => {
+          const tier = (m.priority || "STRANGER").toLowerCase();
+          const initial = (m.display_name || m.member_id).charAt(0).toUpperCase();
+          return `<div class="grp-member-row">
+            <div class="grp-member-avatar ${tier}">${initial}</div>
+            <span class="grp-member-name">${escapeHtml(m.display_name || m.member_id)}</span>
+            <span class="grp-member-tier ${tier}">${(m.priority || "STRANGER")}</span>
+          </div>`;
+        }).join("");
+        section.classList.add("visible");
+      } catch(e) { console.warn("loadGroupMembers error:", e); }
+    }
+
+    // Close modal on overlay click
+    document.getElementById("grp-modal").addEventListener("click", function(e) {
+      if (e.target === this) closeNewGroupModal();
+    });
   </script>
 </body>
 
