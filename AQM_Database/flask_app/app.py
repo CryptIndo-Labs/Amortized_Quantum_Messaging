@@ -205,7 +205,7 @@ def _do_background_mint() -> dict:
     targets = {
         "GOLD":   5,
         "SILVER": 6,
-        "BRONZE": 5,
+        "BRONZE": 30,
     }
 
     minted_counts = {"GOLD": 0, "SILVER": 0, "BRONZE": 0}
@@ -410,7 +410,7 @@ def bootstrap():
     """Mint coins for self, register all known contacts."""
     logger.info("Bootstrapping AQM for user: %s", USER_ID)
 
-    targets = {"GOLD": 5, "SILVER": 6, "BRONZE": 5}
+    targets = {"GOLD": 5, "SILVER": 6, "BRONZE": 30}
     minted, minted_bundles = 0, []
 
     for tier, count in targets.items():
