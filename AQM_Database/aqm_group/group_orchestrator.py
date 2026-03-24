@@ -242,19 +242,20 @@ class GroupOrchestrator:
         # On-demand fetch (D9)
         if self._fetch_coins is not None:
             try:
-                # fetch_coins_fn is expected to populate the inventory
                 import asyncio
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-
-                if loop and loop.is_running():
-                    # Already in async context — can't use run_until_complete
-                    # This path is for sync callers only
-                    pass
-                else:
-                    asyncio.run(self._fetch_coins(member_id, coin_tier))
+                import inspect
+                result = self._fetch_coins(member_id, coin_tier)
+                # Support both sync and async callbacks
+                if inspect.isawaitable(result):
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop and loop.is_running():
+                        pass  # Can't block in async context
+                    else:
+                        asyncio.run(result)
+                # else: sync callback already executed
                 return
             except Exception as e:
                 logger.warning("On-demand fetch failed for %s/%s: %s",

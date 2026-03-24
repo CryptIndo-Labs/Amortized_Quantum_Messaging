@@ -34,6 +34,9 @@ def init_group_routes(
     known_contacts,
     login_required_decorator,
     contact_ports=None,
+    coin_server=None,
+    user_uuids=None,
+    run_async_fn=None,
 ):
     """
     Initialize group routes with the necessary dependencies.
@@ -106,6 +109,21 @@ def init_group_routes(
         except Exception as e:
             logger.debug("Could not forward group parcel to %s: %s", recipient_id, e)
 
+    # D9: on-demand coin fetch for STRANGER members in group chat
+    fetch_coins_fn = None
+    if coin_server is not None and user_uuids is not None and run_async_fn is not None:
+        from AQM_Database.bridge import sync_inventory
+
+        def _fetch_coins_sync(member_id, coin_tier):
+            """Sync wrapper using run_async to bridge into the PG pool's event loop."""
+            if member_id in user_uuids:
+                run_async_fn(sync_inventory(
+                    coin_server, inventory,
+                    member_id, user_uuids[member_id], user_uuids[user_id],
+                ))
+
+        fetch_coins_fn = _fetch_coins_sync
+
     orchestrator = GroupOrchestrator(
         user_id=user_id,
         group_db=group_db,
@@ -115,6 +133,7 @@ def init_group_routes(
         crypto=crypto,
         hot_edge_tracker=hot_edge_tracker,
         send_parcel_fn=send_parcel,
+        fetch_coins_fn=fetch_coins_fn,
     )
 
     # ── Routes ────────────────────────────────────────────────────────

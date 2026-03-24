@@ -42,7 +42,7 @@ services:
       REDIS_HOST: redis
       PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
       AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_BIPRARSHI_PASSWORD:-aqm-demo-2026}"
+      AQM_PASSWORD: "${AQM_BIPRARSHI_PASSWORD:-biprarshi}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_BIPRARSHI:-change-me-biprarshi}"
 
   shirsa:
@@ -58,7 +58,7 @@ services:
       REDIS_HOST: redis
       PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
       AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_SHIRSA_PASSWORD:-aqm-demo-2026}"
+      AQM_PASSWORD: "${AQM_SHIRSA_PASSWORD:-shirsa}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_SHIRSA:-change-me-shirsa}"
 
   protyasha:
@@ -74,7 +74,7 @@ services:
       REDIS_HOST: redis
       PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
       AQM_CONTACT_HOST_TEMPLATE: docker
-      AQM_PASSWORD: "${AQM_PROTYASHA_PASSWORD:-aqm-demo-2026}"
+      AQM_PASSWORD: "${AQM_PROTYASHA_PASSWORD:-protyasha}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_PROTYASHA:-change-me-protyasha}"
 
   caddy:

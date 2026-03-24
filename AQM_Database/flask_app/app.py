@@ -533,6 +533,9 @@ init_group_routes(
     known_contacts=KNOWN_CONTACTS,
     login_required_decorator=login_required,
     contact_ports=CONTACT_PORTS,
+    coin_server=coin_server,
+    user_uuids=USER_UUIDS,
+    run_async_fn=run_async,
 )
 app.register_blueprint(group_bp)
 
