@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # AQM Localhost Deploy Script
-# Starts 3 test instances: galice (7000), gbob (7001), gcharlie (7002)
+# Starts 3 instances: protyasha (7000), biprarshi (7001), shirsa (7002)
 # Usage: ./deploy.sh [--wipe]  (--wipe removes all local DBs first)
 
 set -euo pipefail
 
 PORTS=(7000 7001 7002)
-USERS=(galice gbob gcharlie)
+USERS=(protyasha biprarshi shirsa)
 DB_DIR="$HOME/.aqm"
 
 # ── Kill existing instances ──
@@ -32,16 +32,16 @@ fi
 echo "Starting AQM instances..."
 
 python -m AQM_Database.flask_app.app \
-  --user galice --port 7000 --host 127.0.0.1 \
-  --contacts gbob gcharlie --contact-ports 7001 7002 &
+  --user protyasha --port 7000 --host 127.0.0.1 \
+  --contacts biprarshi shirsa --contact-ports 7001 7002 &
 
 python -m AQM_Database.flask_app.app \
-  --user gbob --port 7001 --host 127.0.0.1 \
-  --contacts galice gcharlie --contact-ports 7000 7002 &
+  --user biprarshi --port 7001 --host 127.0.0.1 \
+  --contacts protyasha shirsa --contact-ports 7000 7002 &
 
 python -m AQM_Database.flask_app.app \
-  --user gcharlie --port 7002 --host 127.0.0.1 \
-  --contacts galice gbob --contact-ports 7000 7001 &
+  --user shirsa --port 7002 --host 127.0.0.1 \
+  --contacts protyasha biprarshi --contact-ports 7000 7001 &
 
 sleep 3
 
