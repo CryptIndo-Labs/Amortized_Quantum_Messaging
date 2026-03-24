@@ -1,0 +1,26 @@
+biprarshi.cryptindo-aqm.org {
+    reverse_proxy biprarshi:5000
+    header /stream {
+        Cache-Control no-cache
+        X-Accel-Buffering no
+        Content-Type text/event-stream
+    }
+}
+
+shirsa.cryptindo-aqm.org {
+    reverse_proxy shirsa:5001
+    header /stream {
+        Cache-Control no-cache
+        X-Accel-Buffering no
+        Content-Type text/event-stream
+    }
+}
+
+protyasha.cryptindo-aqm.org {
+    reverse_proxy protyasha:5002
+    header /stream {
+        Cache-Control no-cache
+        X-Accel-Buffering no
+        Content-Type text/event-stream
+    }
+}

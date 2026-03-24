@@ -23,11 +23,11 @@ pg_isready -h 127.0.0.1 -p 5433   # should say "accepting connections"
 
 ### Instances
 
-| User     | URL                    | Port |
-|----------|------------------------|------|
-| galice   | http://127.0.0.1:7000  | 7000 |
-| gbob     | http://127.0.0.1:7001  | 7001 |
-| gcharlie | http://127.0.0.1:7002  | 7002 |
+| User      | URL                    | Port |
+|-----------|------------------------|------|
+| protyasha | http://127.0.0.1:7000  | 7000 |
+| biprarshi | http://127.0.0.1:7001  | 7001 |
+| shirsa    | http://127.0.0.1:7002  | 7002 |
 
 **Password:** `aqm-demo-2026` (override with `--password` or `AQM_PASSWORD` env var)
 
@@ -35,8 +35,8 @@ pg_isready -h 127.0.0.1 -p 5433   # should say "accepting connections"
 
 ```bash
 python -m AQM_Database.flask_app.app \
-  --user galice --port 7000 --host 127.0.0.1 \
-  --contacts gbob gcharlie --contact-ports 7001 7002
+  --user protyasha --port 7000 --host 127.0.0.1 \
+  --contacts biprarshi shirsa --contact-ports 7001 7002
 ```
 
 ### Stop All
@@ -51,7 +51,7 @@ pkill -f "AQM_Database.flask_app.app"
 
 ```bash
 # SQLite
-rm -f ~/.aqm/galice_*.db* ~/.aqm/gbob_*.db* ~/.aqm/gcharlie_*.db*
+rm -f ~/.aqm/protyasha_*.db* ~/.aqm/biprarshi_*.db* ~/.aqm/shirsa_*.db*
 
 # PostgreSQL (wipe and re-run migrations)
 PGPASSWORD=aqm_dev_password psql -h 127.0.0.1 -p 5433 -U aqm_user -d aqm \
