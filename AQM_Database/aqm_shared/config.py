@@ -27,9 +27,9 @@ VAULT_PURGE_MAX_AGE_DAYS    = 30
 # Inventory Budget Caps (from AQM paper Table 2)
 
 BUDGET_CAPS = {
-    "BESTIE":   {"GOLD": 50, "SILVER": 40, "BRONZE": 10},
-    "MATE":     {"GOLD": 0,  "SILVER": 60, "BRONZE": 40},
-    "STRANGER": {"GOLD": 0,  "SILVER": 0,  "BRONZE": 50},
+    "BESTIE":   {"GOLD": 5, "SILVER": 4, "BRONZE": 1},
+    "MATE":     {"GOLD": 0, "SILVER": 6, "BRONZE": 4},
+    "STRANGER": {"GOLD": 0, "SILVER": 0, "BRONZE": 5},
 }
 
 # Inventory Settings
