@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>AQM — {{ user_id | upper }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link
@@ -1424,11 +1424,247 @@
       border-color: rgba(232, 152, 0, 0.35);
       background: rgba(232, 152, 0, 0.08)
     }
+
+    /* ── Mobile bottom navigation (hidden on desktop) ── */
+    .mobile-bottom-nav {
+      display: none;
+      position: fixed;
+      z-index: 200;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
+      background: linear-gradient(180deg, rgba(230, 242, 255, 0.92) 0%, rgba(210, 232, 252, 0.96) 100%);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-top: 1px solid rgba(160, 210, 255, 0.45);
+      box-shadow: 0 -4px 24px rgba(80, 140, 200, 0.12);
+      justify-content: space-around;
+      align-items: stretch;
+      gap: 6px;
+      touch-action: manipulation;
+    }
+
+    .mob-nav-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      min-height: 48px;
+      padding: 6px 4px;
+      border: none;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color .2s, background .2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .mob-nav-btn .mob-nav-icon {
+      font-size: 20px;
+      line-height: 1;
+      opacity: .9;
+    }
+
+    .mob-nav-btn .mob-nav-label {
+      font-size: 9px;
+      letter-spacing: 1.2px;
+      margin-top: 1px;
+    }
+
+    .mob-nav-btn.active {
+      color: var(--accent-teal);
+      background: rgba(33, 150, 200, 0.12);
+    }
+
+    @media (max-width: 900px) {
+      html {
+        height: 100%;
+        height: 100dvh;
+      }
+
+      body {
+        font-size: 15px;
+        min-height: 100%;
+        min-height: 100dvh;
+        padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) 0 env(safe-area-inset-left, 0);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+        grid-template-areas: "topbar" "main";
+        height: 100%;
+        max-height: 100dvh;
+        min-height: 0;
+        gap: 8px;
+        padding: 8px;
+        padding-bottom: calc(8px + 56px + env(safe-area-inset-bottom, 0px));
+      }
+
+      .mobile-bottom-nav {
+        display: flex;
+      }
+
+      .topbar {
+        grid-area: topbar;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        padding: 8px 12px;
+        min-height: 0;
+      }
+
+      .topbar-logo {
+        letter-spacing: 2px;
+        font-size: 12px;
+      }
+
+      .topbar-coins {
+        margin-left: 0;
+        flex-wrap: wrap;
+        order: 4;
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .topbar-status {
+        font-size: 9px;
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      #conn-status {
+        font-size: 8px;
+        padding: 4px 8px;
+      }
+
+      .contacts-panel,
+      .chat-panel,
+      .vault-panel {
+        grid-area: main;
+        min-height: 0;
+        min-width: 0;
+      }
+
+      #app-layout:not([data-mobile-tab]) .chat-panel {
+        display: flex !important;
+      }
+
+      #app-layout:not([data-mobile-tab]) .contacts-panel,
+      #app-layout:not([data-mobile-tab]) .vault-panel {
+        display: none !important;
+      }
+
+      #app-layout[data-mobile-tab="contacts"] .contacts-panel {
+        display: flex !important;
+      }
+
+      #app-layout[data-mobile-tab="contacts"] .chat-panel,
+      #app-layout[data-mobile-tab="contacts"] .vault-panel {
+        display: none !important;
+      }
+
+      #app-layout[data-mobile-tab="chat"] .chat-panel {
+        display: flex !important;
+      }
+
+      #app-layout[data-mobile-tab="chat"] .contacts-panel,
+      #app-layout[data-mobile-tab="chat"] .vault-panel {
+        display: none !important;
+      }
+
+      #app-layout[data-mobile-tab="vault"] .vault-panel {
+        display: flex !important;
+      }
+
+      #app-layout[data-mobile-tab="vault"] .contacts-panel,
+      #app-layout[data-mobile-tab="vault"] .chat-panel {
+        display: none !important;
+      }
+
+      .messages-container,
+      .contacts-list,
+      .grp-list,
+      .vault-body {
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .message-row {
+        max-width: 88%;
+      }
+
+      .message-bubble {
+        font-size: 15px;
+      }
+
+      .chat-textarea {
+        font-size: 16px;
+        min-height: 44px;
+      }
+
+      .send-btn {
+        min-width: 72px;
+        min-height: 44px;
+        padding: 10px 14px;
+      }
+
+      .grp-tab-bar {
+        flex-wrap: wrap;
+      }
+
+      .contact-card,
+      .grp-card {
+        min-height: 48px;
+        touch-action: manipulation;
+      }
+
+      .grp-modal {
+        width: min(340px, calc(100vw - 24px));
+        max-height: min(520px, 88dvh);
+        margin: 12px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .toast-container {
+        bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+        left: 12px;
+        right: 12px;
+      }
+
+      .toast {
+        max-width: none;
+      }
+    }
+
+    @media (max-width: 380px) {
+      .topbar-status {
+        display: none;
+      }
+
+      .coin-count {
+        padding: 2px 8px;
+        font-size: 11px;
+      }
+
+      .coin-count .val {
+        font-size: 13px;
+      }
+    }
   </style>
 </head>
 
 <body>
-  <div class="layout">
+  <div class="layout" id="app-layout">
     <header class="topbar">
       <div class="topbar-logo"><span class="dot"></span>AQM</div>
       <div class="topbar-identity">
@@ -1613,6 +1849,21 @@
     </aside>
   </div>
 
+  <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Main sections">
+    <button type="button" class="mob-nav-btn" data-tab="contacts" onclick="setMobileTab('contacts')">
+      <span class="mob-nav-icon" aria-hidden="true">👥</span>
+      <span class="mob-nav-label">Peers</span>
+    </button>
+    <button type="button" class="mob-nav-btn active" data-tab="chat" onclick="setMobileTab('chat')">
+      <span class="mob-nav-icon" aria-hidden="true">💬</span>
+      <span class="mob-nav-label">Chat</span>
+    </button>
+    <button type="button" class="mob-nav-btn" data-tab="vault" onclick="setMobileTab('vault')">
+      <span class="mob-nav-icon" aria-hidden="true">🔐</span>
+      <span class="mob-nav-label">Crypto</span>
+    </button>
+  </nav>
+
   <div class="grp-modal-overlay" id="grp-modal">
     <div class="grp-modal">
       <div class="grp-modal-title">New Group</div>
@@ -1635,6 +1886,44 @@
     let activeContact = KNOWN_CONTACTS[0];
     const TIER_COLORS = { GOLD: "#e8b800", SILVER: "#88b8d8", BRONZE: "#c87830" };
     const TIER_CSS = { GOLD: "gold", SILVER: "silver", BRONZE: "bronze" };
+    const MOBILE_BREAKPOINT = 900;
+
+    function isMobileLayout() {
+      return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches;
+    }
+
+    function setMobileTab(tab) {
+      const layout = document.getElementById("app-layout");
+      const nav = document.getElementById("mobile-bottom-nav");
+      if (!layout) return;
+      if (!isMobileLayout()) return;
+      layout.dataset.mobileTab = tab;
+      if (nav) {
+        nav.querySelectorAll(".mob-nav-btn").forEach(b => {
+          b.classList.toggle("active", b.dataset.tab === tab);
+        });
+      }
+    }
+
+    function applyResponsiveLayout() {
+      const layout = document.getElementById("app-layout");
+      const nav = document.getElementById("mobile-bottom-nav");
+      if (!layout) return;
+      if (!isMobileLayout()) {
+        layout.removeAttribute("data-mobile-tab");
+        if (nav) nav.querySelectorAll(".mob-nav-btn").forEach(b => b.classList.remove("active"));
+        return;
+      }
+      const tab = layout.dataset.mobileTab || "chat";
+      layout.dataset.mobileTab = tab;
+      if (nav) {
+        nav.querySelectorAll(".mob-nav-btn").forEach(b => {
+          b.classList.toggle("active", b.dataset.tab === tab);
+        });
+      }
+    }
+
+    window.addEventListener("resize", () => applyResponsiveLayout());
 
     let prevCounts = { gold: null, silver: null, bronze: null };
     let prevVault = { gold: null, silver: null, bronze: null };
@@ -1853,7 +2142,7 @@
         const targetBurns = c.priority === "STRANGER" ? 2 : 3;
         const burnPct = Math.min(100, (bothBurns / targetBurns) * 100);
         const lock = c.priority_locked ? "🔒" : "", np = getNextPromo(c);
-        return `<div class="contact-card priority-${c.priority} ${c.contact_id === activeContact ? 'active' : ''}" onclick="selectContact('${c.contact_id}')">
+        return `<div class="contact-card priority-${c.priority} ${c.contact_id === activeContact ? 'active' : ''}" onclick="selectContact('${c.contact_id}', this)">
           <div class="contact-name">${c.display_name} ${lock}</div>
           <div class="contact-meta">
             <span class="priority-badge ${c.priority}">${c.priority}</span>
@@ -1880,12 +2169,13 @@
       return null;
     }
 
-    function selectContact(id) {
+    function selectContact(id, cardEl) {
       activeContact = id;
       document.querySelectorAll(".contact-card").forEach(el => el.classList.remove("active"));
-      event.currentTarget.classList.add("active");
+      if (cardEl) cardEl.classList.add("active");
       document.getElementById("chat-partner").textContent = id.toUpperCase();
       loadHistory(id, true);
+      if (isMobileLayout()) setMobileTab("chat");
     }
 
     // ── Ratchet / Context ─────────────────────────────────────────────
@@ -1983,6 +2273,7 @@
     setInterval(loadStatus, 5000);
     setInterval(() => { if (!_grpMode) loadHistory(activeContact, false); }, 8000);
     startCooldownTick();
+    applyResponsiveLayout();
     connectSSE();
 
     // ── Group Chat ────────────────────────────────────────────────────
@@ -2053,6 +2344,7 @@
     }
 
     function showGroupChat(groupId, name) {
+      if (isMobileLayout()) setMobileTab("chat");
       // Update chat header
       const headerTitle = document.querySelector(".chat-panel .panel-header-title");
       const headerBadge = document.getElementById("chat-partner");
