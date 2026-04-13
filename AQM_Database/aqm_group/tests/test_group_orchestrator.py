@@ -309,13 +309,10 @@ class TestSendWithHotEdge:
 
         group = alice["orch"].create_group("G1", ["bob"])
 
-        # First send — COLD, consumes a coin
+        # First send — COLD, consumes a coin; orchestrator auto-activates HOT toward bob
         alice["orch"].send_group_message(group.group_id, "cold msg")
 
-        # Manually activate HOT edge for bob
-        alice["hot_edge"].activate(group.group_id, "bob", os.urandom(32))
-
-        # Second send — bob is HOT, should not consume coin
+        # Second send — bob is HOT (same KEM secret), should not consume another coin
         raw = alice["orch"].send_group_message(group.group_id, "hot msg")
         _, inner = parse_parcel(raw)
         assert "bob" in inner.hot_leaf_ids
@@ -381,6 +378,38 @@ class TestReceiveGroupMessage:
         # Bob receives
         plaintext = bob["orch"].receive_group_message(raw)
         assert plaintext == "hello bob"
+
+    def test_receive_hot_after_sender_second_message(self, setup):
+        """COLD first → Bob activates; Alice second send HOT → Bob decrypts with KEM secret + counter."""
+        alice = setup["alice"]
+        bob = setup["bob"]
+        crypto = setup["crypto"]
+
+        alice["inventory"].register_contact("bob", "STRANGER", "Bob")
+        bob["inventory"].register_contact("alice", "STRANGER", "Alice")
+
+        for _ in range(5):
+            bundle = crypto.mint_coin("BRONZE")
+            alice["inventory"].store_key(
+                "bob", bundle.key_id, "BRONZE",
+                bundle.public_key, bundle.signature,
+            )
+            bob["vault"].store_key(
+                bundle.key_id, "BRONZE", bundle.secret_key,
+                bytes(12), bytes(16),
+            )
+
+        group = alice["orch"].create_group("G1", ["bob"])
+        bob["group_db"].create_group(group.group_id, "G1", role="MEMBER")
+        bob["group_db"].add_member(group.group_id, "alice", "Alice")
+
+        raw1 = alice["orch"].send_group_message(group.group_id, "first cold")
+        assert bob["orch"].receive_group_message(raw1) == "first cold"
+
+        raw2 = alice["orch"].send_group_message(group.group_id, "second hot")
+        _, inner2 = parse_parcel(raw2)
+        assert "bob" in inner2.hot_leaf_ids
+        assert bob["orch"].receive_group_message(raw2) == "second hot"
 
     def test_receive_records_message_locally(self, setup):
         """D10: received message is stored in local SQLite."""

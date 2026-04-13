@@ -56,8 +56,22 @@ class TestParcelRoundTrip:
         assert i2.root_key_enc["BESTIE"] == inner.root_key_enc["BESTIE"]
         assert i2.leaf_enc["a"] == inner.leaf_enc["a"]
         assert i2.hot_leaf_ids == ["a"]
+        assert i2.hot_leaf_counters == {}
         assert i2.encrypted_payload == inner.encrypted_payload
         assert i2.sender_signature == inner.sender_signature
+
+    def test_hot_leaf_counters_roundtrip(self):
+        """hot_leaf_counters dict survives serialization."""
+        inner = make_inner(
+            root_key_enc={"STRANGER": b"r"},
+            leaf_enc={"a": b"l"},
+            hot_leaf_ids=["a"],
+            hot_leaf_counters={"a": 2},
+            encrypted_payload=b"p",
+        )
+        header = make_header("g1", "s", ["a"])
+        _, i2 = parse_parcel(build_parcel(header, inner))
+        assert i2.hot_leaf_counters == {"a": 2}
 
     def test_hot_leaf_ids_roundtrip(self):
         """hot_leaf_ids list survives serialization."""
