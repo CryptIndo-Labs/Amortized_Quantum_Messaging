@@ -160,9 +160,6 @@ class GroupOrchestrator:
         # Expire stale HOT edges before building the tree
         self.hot_edge.expire_stale(group_id)
 
-        # Track which members got COLD leaf (for HOT activation after)
-        cold_kem_secrets = {}  # member_id → shared_secret
-
         def get_coin(member_id, coin_tier):
             """
             D8: one coin consumed per COLD leaf member.
@@ -183,11 +180,10 @@ class GroupOrchestrator:
             aad_prefix=aad_prefix,
         )
 
-        # Activate HOT edges for COLD leaves (D4)
-        # For COLD leaves, we need the KEM shared secret to seed the HOT ratchet.
-        # We extract it by re-doing KEM encapsulate... but we already consumed the coin.
-        # Instead, we'll activate HOT on the next receive (when the member replies).
-        # This is the natural flow: sender goes COLD, receiver goes HOT on reply.
+        # COLD→HOT (D4): persist KEM secrets and activate outbound HOT toward each peer.
+        for peer_id, secret in result.cold_kem_secrets.items():
+            self.hot_edge.remember_peer_kem_secret(group_id, peer_id, secret)
+            self.hot_edge.activate(group_id, peer_id, secret)
 
         # D2: sender is not in recipient list
         recipient_ids = [m.member_id for m in members]
@@ -201,6 +197,7 @@ class GroupOrchestrator:
             encrypted_payload=result.encrypted_payload,
             member_tiers=member_tiers,
             leaf_coin_ids=result.leaf_coin_ids,
+            hot_leaf_counters=result.hot_leaf_counters,
         )
         raw = build_parcel(header, inner)
 
@@ -300,13 +297,25 @@ class GroupOrchestrator:
             # Get coin_id hint for this recipient (if COLD leaf)
             my_coin_id = inner.leaf_coin_ids.get(self.user_id)
 
+            cold_secret_holder: list[Optional[bytes]] = [None]
+
             def get_secret_key(kem_ct, coin_tier):
                 """COLD path: KEM decapsulate using vault private key."""
-                return self._kem_decapsulate_from_vault(kem_ct, coin_tier, my_coin_id)
+                s = self._kem_decapsulate_from_vault(kem_ct, coin_tier, my_coin_id)
+                cold_secret_holder[0] = s
+                return s
 
-            def get_hot_key(member_id):
-                """HOT path: derive key from HOT edge ratchet."""
-                return self.hot_edge.derive_key(header.group_id, member_id)
+            def get_hot_key_decrypt(member_id: str):
+                """HOT path: same AES key sender derived (needs stored KEM secret + counter)."""
+                if member_id != self.user_id:
+                    raise ValueError("HOT leaf member_id mismatch")
+                sec = self.hot_edge.get_peer_kem_secret(header.group_id, header.sender_id)
+                if sec is None:
+                    return None
+                ctr = inner.hot_leaf_counters.get(self.user_id, 0)
+                return self.hot_edge.derive_recv_key(
+                    header.group_id, self.user_id, sec, ctr
+                )
 
             plaintext_bytes = self.key_tree.decrypt_as_recipient(
                 my_id=self.user_id,
@@ -316,11 +325,17 @@ class GroupOrchestrator:
                 encrypted_payload=inner.encrypted_payload,
                 hot_leaf_ids=inner.hot_leaf_ids,
                 get_secret_key=get_secret_key,
-                get_hot_key=get_hot_key if self.user_id in inner.hot_leaf_ids else None,
+                get_hot_key=get_hot_key_decrypt if self.user_id in inner.hot_leaf_ids else None,
                 aad_prefix=aad_prefix,
             )
 
             plaintext = plaintext_bytes.decode()
+
+            # Receiver: COLD→HOT toward sender (peer = sender) for future sends / HOT decrypt symmetry
+            if self.user_id not in inner.hot_leaf_ids and cold_secret_holder[0]:
+                s = cold_secret_holder[0]
+                self.hot_edge.remember_peer_kem_secret(header.group_id, header.sender_id, s)
+                self.hot_edge.activate(header.group_id, header.sender_id, s)
 
             # Auto-create group locally if this is the first message we receive
             # (receiver doesn't have the group in their DB yet — only creator does)

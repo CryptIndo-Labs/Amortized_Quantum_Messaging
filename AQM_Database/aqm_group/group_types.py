@@ -41,6 +41,10 @@ class GroupParcelInner:
     # Which leaf entries used the HOT ratchet path (no coin consumed)
     hot_leaf_ids: list[str]
 
+    # Per HOT leaf: sender ratchet counter *before* derive_send_key for this message
+    # (receiver needs this with stored KEM secret to derive the same AES key).
+    hot_leaf_counters: dict[str, int] = field(default_factory=dict)
+
     # Member → tier mapping so receivers know which branch they're on (D1)
     member_tiers: dict[str, str] = field(default_factory=dict)
 

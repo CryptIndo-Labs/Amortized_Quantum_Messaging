@@ -58,6 +58,8 @@ def build_parcel(
             },
             # HOT leaf member IDs (no coin consumed for these)
             "hot_leaf_ids": inner.hot_leaf_ids,
+            # HOT: sender ratchet counter before derive for each hot leaf member
+            "hot_leaf_counters": inner.hot_leaf_counters,
             # Member → tier mapping so receivers know their branch (D1)
             "member_tiers": inner.member_tiers,
             # Member → coin_key_id for COLD leaves (receiver vault lookup)
@@ -95,6 +97,8 @@ def parse_parcel(raw: str) -> tuple[GroupParcelHeader, GroupParcelInner]:
     )
 
     i = data["inner"]
+    raw_counters = i.get("hot_leaf_counters") or {}
+    hot_leaf_counters = {k: int(v) for k, v in raw_counters.items()}
     inner = GroupParcelInner(
         root_key_enc={
             tier: base64.b64decode(blob)
@@ -105,6 +109,7 @@ def parse_parcel(raw: str) -> tuple[GroupParcelHeader, GroupParcelInner]:
             for mid, blob in i["leaf_enc"].items()
         },
         hot_leaf_ids=i["hot_leaf_ids"],
+        hot_leaf_counters=hot_leaf_counters,
         member_tiers=i.get("member_tiers", {}),
         leaf_coin_ids=i.get("leaf_coin_ids", {}),
         encrypted_payload=base64.b64decode(i["encrypted_payload"]),
@@ -143,6 +148,7 @@ def make_inner(
     encrypted_payload: bytes,
     member_tiers: dict[str, str] = None,
     leaf_coin_ids: dict[str, str] = None,
+    hot_leaf_counters: dict[str, int] = None,
     sender_signature: bytes = b"",
 ) -> GroupParcelInner:
     """Create the inner B-Tree payload structure."""
@@ -150,6 +156,7 @@ def make_inner(
         root_key_enc=root_key_enc,
         leaf_enc=leaf_enc,
         hot_leaf_ids=hot_leaf_ids,
+        hot_leaf_counters=hot_leaf_counters or {},
         member_tiers=member_tiers or {},
         leaf_coin_ids=leaf_coin_ids or {},
         encrypted_payload=encrypted_payload,

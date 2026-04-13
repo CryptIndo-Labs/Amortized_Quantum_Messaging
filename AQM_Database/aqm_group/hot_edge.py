@@ -14,7 +14,7 @@ Chain keys are stored encrypted at rest (D4) — never plaintext in SQLite.
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 from AQM_Database.aqm_shared.crypto_engine import CryptoEngine
 from AQM_Database.aqm_session.ratchet import SessionRatchet
@@ -91,6 +91,68 @@ class HotEdgeTracker:
         self.group_db.set_hot_edge(edge)
         logger.info("COLD→HOT: group=%s member=%s", group_id, member_id)
 
+    def remember_peer_kem_secret(self, group_id: str, peer_id: str, shared_secret: bytes) -> None:
+        """
+        Store the KEM shared secret for this peer (AEAD with vault_key).
+        Needed to derive HOT receive keys; updated on each COLD exchange.
+        """
+        aad = f"group-kem:{group_id}:{peer_id}".encode()
+        blob = self.crypto.encrypt_aead(shared_secret, self.vault_key, aad)
+        self.group_db.store_peer_kem_ciphertext(group_id, peer_id, blob)
+
+    def get_peer_kem_secret(self, group_id: str, peer_id: str) -> Optional[bytes]:
+        blob = self.group_db.get_peer_kem_ciphertext(group_id, peer_id)
+        if not blob:
+            return None
+        aad = f"group-kem:{group_id}:{peer_id}".encode()
+        try:
+            return self.crypto.decrypt_aead(blob, self.vault_key, aad)
+        except Exception:
+            return None
+
+    def derive_key_with_counter(
+        self, group_id: str, peer_id: str
+    ) -> Optional[Tuple[bytes, int]]:
+        """
+        Derive next HOT send key and return (key, msg_counter_before_derive).
+
+        peer_id is the remote member this leaf is addressed to (same as activate()).
+        """
+        edge = self.group_db.get_hot_edge(group_id, peer_id)
+        if edge is None or edge.state != "HOT":
+            return None
+
+        if self._is_expired(edge):
+            self.deactivate(group_id, peer_id)
+            return None
+
+        counter_before = edge.msg_counter
+        chain_key = self._decrypt_chain_key(edge)
+
+        ratchet = SessionRatchet(
+            contact_id=f"group:{group_id}:{peer_id}",
+            coin_tier="BRONZE",
+        )
+        ratchet.send_chain_key = chain_key
+        ratchet.send_counter = edge.msg_counter
+        ratchet.has_sent_first = True
+        ratchet.max_messages = 999999
+
+        msg_key = ratchet.derive_send_key()
+
+        new_chain_key = ratchet.send_chain_key
+        aad = f"hot-edge:{group_id}:{peer_id}".encode()
+        blob = self.crypto.encrypt_aead(new_chain_key, self.vault_key, aad)
+
+        edge.ephemeral_chain_key = blob[12:-16]
+        edge.chain_key_iv = blob[:12]
+        edge.chain_key_tag = blob[-16:]
+        edge.msg_counter = ratchet.send_counter
+        edge.last_activity_at = time.time()
+        self.group_db.set_hot_edge(edge)
+
+        return (msg_key, counter_before)
+
     def derive_key(self, group_id: str, member_id: str) -> Optional[bytes]:
         """
         Derive the next AES-256 key from a HOT edge's ratchet.
@@ -101,67 +163,32 @@ class HotEdgeTracker:
 
         Returns None if edge is COLD or expired.
         """
-        edge = self.group_db.get_hot_edge(group_id, member_id)
-        if edge is None or edge.state != "HOT":
-            return None
+        t = self.derive_key_with_counter(group_id, member_id)
+        return t[0] if t else None
 
-        # Check TTL — expire if silent too long
-        if self._is_expired(edge):
-            self.deactivate(group_id, member_id)
-            return None
-
-        # Decrypt chain key from storage (D4)
-        chain_key = self._decrypt_chain_key(edge)
-
-        # Build a temporary ratchet to derive the next key
-        ratchet = SessionRatchet(
-            contact_id=f"group:{group_id}:{member_id}",
-            coin_tier="BRONZE",
-        )
-        ratchet.send_chain_key = chain_key
-        ratchet.send_counter = edge.msg_counter
-        ratchet.has_sent_first = True
-        # Override max_messages to avoid exhaustion — HOT edges reset on COLD
-        ratchet.max_messages = 999999
-
-        msg_key = ratchet.derive_send_key()
-
-        # Re-encrypt advanced chain key and update state
-        new_chain_key = ratchet.send_chain_key
-        aad = f"hot-edge:{group_id}:{member_id}".encode()
-        blob = self.crypto.encrypt_aead(new_chain_key, self.vault_key, aad)
-
-        edge.ephemeral_chain_key = blob[12:-16]
-        edge.chain_key_iv = blob[:12]
-        edge.chain_key_tag = blob[-16:]
-        edge.msg_counter = ratchet.send_counter
-        edge.last_activity_at = time.time()
-        self.group_db.set_hot_edge(edge)
-
-        return msg_key
-
-    def derive_recv_key(self, group_id: str, member_id: str,
-                        shared_secret: bytes, msg_counter: int) -> bytes:
+    def derive_recv_key(
+        self,
+        group_id: str,
+        leaf_recipient_id: str,
+        shared_secret: bytes,
+        msg_counter: int,
+    ) -> bytes:
         """
-        Derive the decryption key for a HOT leaf from a received parcel.
+        Derive the AES key for a HOT leaf as the recipient.
 
-        Why: the receiver needs the same key the sender derived. Since
-        we know the shared_secret (from the original COLD KEM exchange)
-        and the counter, we can reconstruct the exact key.
+        leaf_recipient_id must match the leaf member_id and the sender's
+        activate(..., peer=leaf_recipient_id) so SessionRatchet contact_id matches.
 
-        Args:
-            shared_secret: original KEM shared secret that seeded the HOT edge
-            msg_counter: the sender's counter when they derived this key
+        msg_counter is the sender's stored counter *before* derive_send_key for this leaf.
         """
         ratchet = SessionRatchet(
-            contact_id=f"group:{group_id}:{member_id}",
+            contact_id=f"group:{group_id}:{leaf_recipient_id}",
             coin_tier="BRONZE",
             master_secret=shared_secret,
             is_initiator=True,
         )
         ratchet.max_messages = 999999
 
-        # Advance the ratchet to match the sender's counter
         for _ in range(msg_counter + 1):
             key = ratchet.derive_send_key()
 
@@ -202,12 +229,10 @@ class HotEdgeTracker:
         """
         Returns a callable suitable for GroupKeyTree.build(get_hot_key_for_member=...).
 
-        Why: provides the bridge between HotEdgeTracker and GroupKeyTree.
-        Returns a function that takes member_id and returns the derived key
-        if HOT, or None if COLD.
+        Returns (aes_key, counter_before) for HOT, or None if COLD.
         """
         def _get(member_id):
-            return self.derive_key(group_id, member_id)
+            return self.derive_key_with_counter(group_id, member_id)
         return _get
 
     def expire_stale(self, group_id: str) -> list[str]:

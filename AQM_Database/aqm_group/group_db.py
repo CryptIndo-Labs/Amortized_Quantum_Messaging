@@ -88,6 +88,13 @@ class GroupDatabase:
                 ON group_members (group_id);
             CREATE INDEX IF NOT EXISTS idx_group_messages_ts
                 ON group_messages (group_id, received_at);
+
+            CREATE TABLE IF NOT EXISTS group_peer_kem_secrets (
+                group_id     TEXT NOT NULL,
+                peer_id      TEXT NOT NULL,
+                ciphertext   BLOB NOT NULL,
+                PRIMARY KEY (group_id, peer_id)
+            );
         """)
         self.connection.commit()
 
@@ -221,6 +228,33 @@ class GroupDatabase:
             self.cursor.execute(
                 "DELETE FROM group_hot_edges WHERE group_id = ? AND member_id = ?",
                 (group_id, member_id),
+            )
+            self.connection.commit()
+
+    def store_peer_kem_ciphertext(self, group_id: str, peer_id: str, ciphertext: bytes) -> None:
+        """Persist AEAD blob for last KEM shared secret toward peer (encrypted at rest)."""
+        with self._lock:
+            self.cursor.execute(
+                "INSERT OR REPLACE INTO group_peer_kem_secrets (group_id, peer_id, ciphertext) "
+                "VALUES (?, ?, ?)",
+                (group_id, peer_id, ciphertext),
+            )
+            self.connection.commit()
+
+    def get_peer_kem_ciphertext(self, group_id: str, peer_id: str) -> Optional[bytes]:
+        with self._lock:
+            self.cursor.execute(
+                "SELECT ciphertext FROM group_peer_kem_secrets WHERE group_id = ? AND peer_id = ?",
+                (group_id, peer_id),
+            )
+            row = self.cursor.fetchone()
+        return row[0] if row else None
+
+    def delete_peer_kem_ciphertext(self, group_id: str, peer_id: str) -> None:
+        with self._lock:
+            self.cursor.execute(
+                "DELETE FROM group_peer_kem_secrets WHERE group_id = ? AND peer_id = ?",
+                (group_id, peer_id),
             )
             self.connection.commit()
 

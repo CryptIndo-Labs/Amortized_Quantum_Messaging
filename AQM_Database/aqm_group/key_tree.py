@@ -20,7 +20,7 @@ Heterogeneous cipher suites (PDF §8.1):
 import os
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union, Tuple
 
 from AQM_Database.aqm_shared.crypto_engine import CryptoEngine
 from AQM_Database.aqm_group.group_types import BRANCH_COIN_TIER
@@ -57,6 +57,8 @@ class TreeBuildResult:
     root_key_enc: dict[str, bytes]     # tier → encrypted root key
     leaf_enc: dict[str, bytes]         # member_id → encrypted branch key
     hot_leaf_ids: list[str]            # member_ids that used HOT path
+    hot_leaf_counters: dict[str, int] = field(default_factory=dict)  # HOT: counter before derive
+    cold_kem_secrets: dict[str, bytes] = field(default_factory=dict)  # COLD: shared_secret per member
     leaf_coin_ids: dict[str, str] = field(default_factory=dict)  # member_id → coin key_id (COLD only)
 
 
@@ -93,9 +95,9 @@ class GroupKeyTree:
             get_coin_for_member: callable(member_id, coin_tier) → (public_key, key_id)
                 Called for COLD leaves only. Returns coin's public key + key_id.
                 Raises if no coin available (G2).
-            get_hot_key_for_member: callable(group_id, member_id) → Optional[bytes]
-                Returns 32-byte AES key if member is HOT, None if COLD.
-                When HOT, no coin is consumed (D4, D8).
+            get_hot_key_for_member: callable(member_id) → Optional[Union[bytes, Tuple[bytes, int]]]
+                Returns (aes_key, counter_before_derive) or bare bytes (counter defaults to 0),
+                or None if COLD. When HOT, no coin is consumed (D4, D8).
             aad_prefix: additional authenticated data prefix for all AES-GCM ops
         """
         # Level 0: generate ephemeral root key
@@ -109,6 +111,8 @@ class GroupKeyTree:
         root_key_enc: dict[str, bytes] = {}
         leaf_enc: dict[str, bytes] = {}
         hot_leaf_ids: list[str] = []
+        hot_leaf_counters: dict[str, int] = {}
+        cold_kem_secrets: dict[str, bytes] = {}
         leaf_coin_ids: dict[str, str] = {}
 
         for tier, member_ids in members_by_tier.items():
@@ -128,9 +132,15 @@ class GroupKeyTree:
 
             for member_id in member_ids:
                 # Check if this member has a HOT edge (D4)
-                hot_key = None
+                hot_key: Optional[bytes] = None
+                hot_ctr_before: int = 0
                 if get_hot_key_for_member is not None:
-                    hot_key = get_hot_key_for_member(member_id)
+                    hk = get_hot_key_for_member(member_id)
+                    if hk is not None:
+                        if isinstance(hk, tuple):
+                            hot_key, hot_ctr_before = hk[0], hk[1]
+                        else:
+                            hot_key = hk
 
                 if hot_key is not None:
                     # HOT path: encrypt branch key with symmetric ratchet key
@@ -143,6 +153,7 @@ class GroupKeyTree:
                         hot_path=True,
                     )
                     hot_leaf_ids.append(member_id)
+                    hot_leaf_counters[member_id] = hot_ctr_before
                     logger.debug("HOT leaf for %s — no coin consumed", member_id)
                 else:
                     # COLD path: KEM encapsulate with member's coin (D8)
@@ -168,6 +179,7 @@ class GroupKeyTree:
                         coin_key_id=key_id,
                     )
                     leaf_coin_ids[member_id] = key_id
+                    cold_kem_secrets[member_id] = shared_secret
                     logger.debug("COLD leaf for %s — consumed coin %s (%s)",
                                 member_id, key_id, coin_tier)
 
@@ -186,6 +198,8 @@ class GroupKeyTree:
             root_key_enc=root_key_enc,
             leaf_enc=leaf_enc,
             hot_leaf_ids=hot_leaf_ids,
+            hot_leaf_counters=hot_leaf_counters,
+            cold_kem_secrets=cold_kem_secrets,
             leaf_coin_ids=leaf_coin_ids,
         )
 
