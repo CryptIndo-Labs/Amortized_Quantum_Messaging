@@ -918,7 +918,7 @@ def api_receive():
                 if ratchet is None:
                     ratchet = SessionRatchet(sender, coin_tier, shared_secret, is_initiator=False)
                 else:
-                    ratchet.rekey_recv_only(shared_secret, coin_tier, is_initiator=False)
+                    ratchet.rekey(shared_secret, coin_tier, is_initiator=False)
 
         except Exception as e:
             logger.warning("KEM decap failed: %s", e)
