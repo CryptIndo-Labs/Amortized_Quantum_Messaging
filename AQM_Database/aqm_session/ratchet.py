@@ -124,8 +124,6 @@ class SessionRatchet:
         return message_key
 
     def needs_rekey(self) -> bool:
-        if not self.is_initiator and not self.has_sent_first:
-            return True
         return self.send_counter >= self.max_messages
 
     def rekey(self, new_master_secret: bytes, new_coin_tier: str,
