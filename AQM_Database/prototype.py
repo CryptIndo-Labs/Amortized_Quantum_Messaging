@@ -125,7 +125,7 @@ MINT_PLAN = [("GOLD", 5), ("SILVER", 6), ("BRONZE", 5)]
 async def phase1_mint(engine: CryptoEngine, vault: SecureVault, server: CoinInventoryServer):
     """MINT: Generate keypairs → store private in vault → upload public to server."""
     Display.phase_header(1, "MINT — Key Generation & Distribution")
-    Display.arrow(f"Crypto backend: {engine.backend}")
+    Display.arrow(f"Crypto backend: liboqs (Kyber-768 + Dilithium-3)")
 
     all_uploads: list[CoinUpload] = []
 

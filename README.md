@@ -1,437 +1,500 @@
-# ReadMe.md
+# AQM — Amortized Quantum Messaging
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+A post-quantum secure messaging system that amortizes expensive key encapsulation operations across hundreds of messages using a symmetric ratchet. One ML-KEM-768 operation covers up to 250 messages — providing post-quantum resistance without per-message KEM overhead.
 
-## Project Overview
+Supports both **1-to-1 direct messaging** and **end-to-end encrypted group chat** using a Categorical B-Tree key distribution scheme with Hot Edge session caching.
 
-AQM Database is the **data persistence layer** for the Amortized Quantum Messaging (AQM) system. It implements a complete post-quantum key lifecycle across three database tiers:
+---
 
-- **Bob's Secure Vault** (local Redis db=0) — stores hardware-encrypted private keys with burn-after-decrypt semantics
-- **Alice's Smart Inventory** (local Redis db=1) — caches contacts' public keys with per-contact/per-tier budget caps and FIFO coin selection with tier fallback
-- **Server's Coin Inventory** (PostgreSQL) — public key directory with atomic Delete-on-Fetch via `FOR UPDATE SKIP LOCKED`
-- **Bridge** — async glue connecting Redis ↔ PostgreSQL (fetch_and_cache, upload_coins, sync_inventory)
-- **Crypto Engine** — post-quantum key generation (Kyber-768 + X25519), Dilithium-3/Ed25519 signing, real NaCl AEAD encryption
-- **Context Manager** — device-aware coin tier selection based on battery, WiFi, and signal strength
-- **Chat** — terminal-to-terminal real-time chat using the full AQM lifecycle, with TLS 1.3 benchmark comparison
+## Live Deployment
 
-## Environment Setup
+The chat is running at [cryptindo-aqm.org](https://cryptindo-aqm.org) on a DigitalOcean droplet with Caddy reverse proxy and auto-provisioned Let's Encrypt TLS.
+
+| User | URL | Password |
+|------|-----|----------|
+| biprarshi | https://biprarshi.cryptindo-aqm.org | `biprarshi` |
+| protyasha | https://protyasha.cryptindo-aqm.org | `protyasha` |
+| shirsa | https://shirsa.cryptindo-aqm.org | `shirsa` |
+
+Open your URL in a browser, enter your password, and start messaging. Direct chat and group chat are available as tabs in the UI.
+
+---
+
+## How It Works
+
+### Direct Messaging
+
+```
+Message 1  → KEM encapsulate (ML-KEM-768) → establish ratchet → encrypt
+Message 2  → derive ratchet key            → encrypt  (no KEM)
+Message 3  → derive ratchet key            → encrypt  (no KEM)
+...
+Message 250 → ratchet exhausted → KEM encapsulate again → new ratchet
+```
+
+Each coin is a public/private keypair. The sender uses the receiver's public key once to establish a shared secret, then both sides derive message keys via HKDF without further KEM operations until the ratchet limit is reached.
+
+### Group Chat — Categorical B-Tree
+
+Group messages use a hierarchical key tree that distributes a single symmetric message key to all members while respecting per-member trust tiers:
+
+```
+                    ┌──────────────┐
+                    │   Root Key   │  (random per-message)
+                    └──────┬───────┘
+               ┌───────────┼───────────┐
+          ┌────▼────┐ ┌────▼────┐ ┌────▼────┐
+          │  GOLD   │ │ SILVER  │ │ BRONZE  │   Branch Keys
+          │ Branch  │ │ Branch  │ │ Branch  │   (one per tier)
+          └────┬────┘ └────┬────┘ └────┬────┘
+            ┌──▼──┐     ┌──▼──┐     ┌──▼──┐
+            │Leaf │     │Leaf │     │Leaf │     Per-member KEM
+            │Alice│     │ Bob │     │Carol│     (or HOT edge)
+            └─────┘     └─────┘     └─────┘
+```
+
+The sender builds the tree, encrypts the root key down through branch keys to per-member leaves, and sends the resulting **group parcel** to the server. The server fans out to each recipient. Each recipient decrypts upward from their leaf to recover the root key and decrypt the message.
+
+**Hot Edge optimization**: after the first COLD (KEM-based) exchange with a member, a `SessionRatchet` is activated for that edge. Subsequent messages within a 10-minute window use the ratchet-derived key directly — bypassing the KEM leaf entirely. After 10 minutes of silence, the edge returns to COLD and the ephemeral chain key is burned.
+
+---
+
+## Coin Tiers
+
+| Tier | KEM Algorithm | Signature | Ratchet Limit | Public Key Size |
+|------|---------------|-----------|---------------|-----------------|
+| GOLD | ML-KEM-768 | ML-DSA-65 | 250 messages | ~3.6 KB |
+| SILVER | ML-KEM-768 | Ed25519 | 150 messages | ~1.2 KB |
+| BRONZE | X25519 | Ed25519 | 75 messages | ~96 B |
+
+In group chat, each COLD leaf consumes one coin of the appropriate tier. HOT edges consume zero coins.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         Flask Web UI                             │
+│  (Per-user instance — one container per user)                    │
+│  Direct Chat (1-to-1)  │  Group Chat (N-way, B-Tree encrypted)  │
+└────────┬───────────┬────┴──────┬───────────────┬─────────────────┘
+         │           │           │               │
+┌────────▼──────┐ ┌──▼──────────▼──┐ ┌──────────▼───────────────┐
+│  SecureVault  │ │ SmartInventory  │ │  Contacts DB + Group DB  │
+│ (Redis—local) │ │ (Redis—local)   │ │  (SQLite—local)          │
+│ Own priv keys │ │ Partner pubs    │ │  Priority / history /    │
+│ Burn on use   │ │ Budget-capped   │ │  groups / members /      │
+└───────────────┘ └──────┬──────────┘ │  hot_edges / messages    │
+                         │ sync       └────────────────────────────┘
+                ┌────────▼──────────┐
+                │  CoinInventory    │
+                │  Server (FastAPI) │
+                │  PostgreSQL 16    │
+                │  Delete-on-Fetch  │
+                └───────────────────┘
+```
+
+### Group Chat Module Map
+
+| Concept (from PDF spec) | Code Class / File |
+|--------------------------|-------------------|
+| Categorical B-Tree | `GroupKeyTree` (`key_tree.py`) |
+| Level 0: Root Key | `TreeBuildResult.root_key` |
+| Level 1: Branch Keys | `BranchResult.branch_key` (per tier) |
+| Level 2: Leaves | `LeafResult` (per member) |
+| Hot Edge State Machine | `HotEdgeTracker` (`hot_edge.py`) |
+| Blind Star Graph Routing | `RelayServer.handle_group_parcel()` (`relay_server.py`) |
+| Group Parcel Wire Format | `build_parcel` / `parse_parcel` (`group_parcel.py`) |
+| Orchestrator (send/recv) | `GroupOrchestrator` (`group_orchestrator.py`) |
+| Client-side Persistence | `GroupDatabase` (`group_db.py`) |
+| Server-side Routing | `003_group_and_mailbox_extension.sql` |
+| Flask UI | `group_routes.py` + `templates/group.html` |
+
+---
+
+## Project Structure
+
+```
+AQM_Database/
+├── flask_app/                     # Web UI (Flask + SSE)
+│   ├── app.py                     # Per-user Flask server
+│   ├── aqm_bridge.py              # Async-to-sync helper
+│   ├── group_routes.py            # Group chat Flask blueprint
+│   └── templates/
+│       ├── index.html             # SPA dashboard (direct + group tabs)
+│       ├── group.html             # Group chat template
+│       └── login.html             # Login page
+├── aqm_shared/                    # Shared types, errors, config, crypto
+│   ├── config.py                  # Constants, budget caps, thresholds
+│   ├── crypto_engine.py           # ML-KEM-768, ML-DSA-65, X25519, AEAD
+│   ├── context_manager.py         # Device context → tier selection
+│   ├── types.py                   # Shared dataclasses
+│   └── errors.py                  # Exception hierarchy
+├── aqm_db/                        # Redis layer (vault + inventory)
+│   ├── vault.py                   # Private key storage
+│   ├── inventory.py               # Partner public key cache
+│   ├── connection.py              # Redis client factory
+│   └── stats.py                   # Storage reporter
+├── aqm_contacts/                  # SQLite contacts + auto-priority
+│   ├── contacts_db.py             # Priority + message history
+│   └── models.py                  # Contact dataclass
+├── aqm_session/                   # HKDF ratchet + persistence
+│   ├── ratchet.py                 # Ratchet implementation
+│   └── session_store.py           # SQLite session store
+├── aqm_group/                     # Group chat subsystem
+│   ├── key_tree.py                # Categorical B-Tree (build/decrypt)
+│   ├── hot_edge.py                # Hot Edge state machine + TTL
+│   ├── group_parcel.py            # Parcel wire format (build/parse)
+│   ├── group_orchestrator.py      # Send/receive orchestration
+│   ├── group_db.py                # SQLite: groups, members, hot_edges, messages
+│   ├── group_types.py             # Dataclasses (header, inner, edge state, etc.)
+│   └── tests/                     # 70 tests (key_tree, hot_edge, parcel, orchestrator)
+├── aqm_server/                    # PostgreSQL coin server
+│   ├── api.py                     # FastAPI endpoints
+│   ├── coin_inventory.py          # Server-side coin registry
+│   ├── db.py                      # Async connection pool
+│   └── migrations/                # SQL schema (incl. 003_group_and_mailbox_extension)
+├── aqm_network/                   # WebSocket relay (protocol + client)
+│   ├── protocol.py                # Message framing
+│   ├── relay_server.py            # WebSocket hub + group parcel fan-out
+│   └── client.py                  # Device-side client
+├── aqm_app/                       # Application orchestrator
+│   └── orchestrator.py            # Wires all subsystems
+├── bridge.py                      # upload_coins / sync_inventory
+├── prototype.py                   # Headless lifecycle demo
+├── requirements.txt               # Pip dependencies
+├── environment.yml                # Conda environment spec
+└── docker-compose.yml             # Redis 7 + PostgreSQL 16
+deploy.py                          # Dynamic N-user deploy script
+Dockerfile                         # Production container image
+docker-compose.prod.yml            # Production compose (generated by deploy.py)
+```
+
+---
+
+## Group Chat Usage Guide
+
+### Creating a Group
+
+1. Log in and switch to the **Groups** tab in the UI
+2. Click **New Group**, enter a name, and check the contacts to include
+3. The group is created locally and all members are notified immediately via HTTP fan-out (`/group/api/notify_create`)
+4. All members see the group in their sidebar without waiting for a first message
+
+### Sending a Group Message
+
+1. Select a group from the sidebar
+2. Type a message and send
+3. The sender's `GroupOrchestrator` builds a B-Tree parcel, encrypting the root key per-member
+4. The parcel is POSTed to the server, which fans it out to each recipient
+5. Recipients decrypt, store locally, and display via SSE push
+
+### Group API Endpoints
+
+| Endpoint | Method | Body | Description |
+|----------|--------|------|-------------|
+| `/group/api/create` | POST | `{name, members}` | Create a new group |
+| `/group/api/send` | POST | `{group_id, message}` | Send a group message |
+| `/group/api/notify_create` | POST | (parcel) | Receive group creation notification |
+| `/group/api/receive` | POST | (parcel) | Receive a group message parcel |
+
+### Local Testing (3 Users)
 
 ```bash
-conda env create -f AQM_Database/enviroment.yml
+# Quick deploy (all 3 instances)
+./deploy.sh          # start protyasha:7000, biprarshi:7001, shirsa:7002
+./deploy.sh --wipe   # wipe DBs first, then start fresh
+
+# Manual start
+python -m AQM_Database.flask_app.app --user protyasha --port 7000 --host 127.0.0.1 --contacts biprarshi shirsa --contact-ports 7001 7002
+python -m AQM_Database.flask_app.app --user biprarshi --port 7001 --host 127.0.0.1 --contacts protyasha shirsa --contact-ports 7000 7002
+python -m AQM_Database.flask_app.app --user shirsa --port 7002 --host 127.0.0.1 --contacts protyasha biprarshi --contact-ports 7000 7001
+
+# Default password: aqm-demo-2026
+# NOTE: Ports 6000-6002 are blocked by Firefox/Chrome (X11 range) — use 7000+
+```
+
+---
+
+## Deploying Your Own Instance
+
+### Prerequisites
+
+- A Linux server with Docker and Docker Compose installed
+- SSH access to the server
+- A domain name (for HTTPS — Caddy auto-provisions Let's Encrypt certificates)
+- This repo cloned on the server
+
+### Step 1 — Point DNS to your server
+
+Create A records for each user subdomain pointing to your server IP:
+
+```
+alice.yourdomain.com   → YOUR_SERVER_IP
+bob.yourdomain.com     → YOUR_SERVER_IP
+charlie.yourdomain.com → YOUR_SERVER_IP
+```
+
+### Step 2 — Generate config with `deploy.py`
+
+```bash
+# With domain (recommended — adds Caddy reverse proxy + auto TLS):
+python deploy.py --users alice:secret1 bob:secret2 charlie:secret3 --domain yourdomain.com
+
+# Without domain (bare IP, no HTTPS):
+python deploy.py --users alice:secret1 bob:secret2 charlie:secret3
+
+# Generate + immediately start:
+python deploy.py --users alice:secret1 bob:secret2 --domain yourdomain.com --up
+```
+
+This creates:
+- **`.env`** — auto-generated DB password, Flask secrets, and your user passwords
+- **`docker-compose.prod.yml`** — Redis, PostgreSQL, coin-server, one container per user, and Caddy
+- **`Caddyfile`** (with `--domain`) — per-user subdomain reverse proxy with auto HTTPS
+
+### Step 3 — Start
+
+```bash
+ssh root@YOUR_SERVER
+cd /path/to/repo
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### Step 4 — Verify
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+```
+
+Each user visits `https://username.yourdomain.com` and logs in with their password. Caddy handles TLS automatically. Both direct and group chat work out of the box.
+
+### Redeploying with different users
+
+```bash
+docker compose -f docker-compose.prod.yml down
+docker volume rm aqm_databse_pg_data    # reset DB if password changed
+python deploy.py --users ... --domain yourdomain.com --up
+```
+
+---
+
+## Local Development
+
+### Prerequisites
+
+**System dependencies:**
+
+```bash
+# Fedora / RHEL
+sudo dnf install redis postgresql16-server liboqs-devel
+
+# macOS
+brew install redis postgresql@16 liboqs
+
+# Start services
+# Fedora:
+sudo systemctl start redis postgresql
+# macOS:
+brew services start redis && brew services start postgresql@16
+```
+
+**Python environment:**
+
+```bash
+conda env create -f AQM_Database/environment.yml
 conda activate aqm-db
-cd AQM_Database && docker compose up -d     # Redis 7 (6379) + PostgreSQL 16 (5433)
+pip install -r AQM_Database/requirements.txt
 ```
 
-Python 3.10+. Key deps: `redis-py`, `asyncpg`, `fastapi`, `pynacl`, `pytest`, `fakeredis`.
-Optional: `liboqs-python` for real Kyber-768 + Dilithium-3 (falls back to X25519-based mock keygen + random padding without it).
-
-## Running the Demo
+**Database setup (Docker — recommended):**
 
 ```bash
-python demo.py                  # preflight checks + 4-phase lifecycle demo
-python demo.py --check          # only run preflight checks
-python demo.py --tests          # run the full test suite (173 tests)
-python demo.py --all            # tests first, then demo
-python demo.py --chat           # two-user chat demo (all 3 priority scenarios)
-python demo.py --demo-pair      # launch two terminals (default: BESTIE)
-python demo.py --demo-pair --priority MATE      # MATE with SILVER ceiling
-python demo.py --demo-pair --priority STRANGER  # STRANGER handshake demo
-python demo.py --chat-bench     # AQM vs TLS 1.3 benchmark
-python -m AQM_Database.prototype  # run demo directly (no preflight)
+cd AQM_Database && docker compose up -d
+# This starts Redis 7 (port 6379) + PostgreSQL 16 (port 5433)
+# Migrations auto-run via /docker-entrypoint-initdb.d mount
 ```
 
-### Chat Demo
+### Running locally
+
+**Start the Coin Server (Terminal 1):**
 
 ```bash
-# Launch two terminals automatically (alice + bob)
-python demo.py --demo-pair                              # default: BESTIE
-python demo.py --demo-pair --priority MATE              # MATE with SILVER ceiling
-python demo.py --demo-pair --priority STRANGER          # STRANGER handshake
-python -m AQM_Database.chat.cli --demo-pair
-python -m AQM_Database.chat.cli --demo-pair --priority MATE
-
-# Interactive two-terminal chat (manual)
-# Terminal 1:
-python -m AQM_Database.chat.cli --user alice --partner bob --priority BESTIE
-# Terminal 2:
-python -m AQM_Database.chat.cli --user bob --partner alice --priority BESTIE
-
-# Auto demo — all 3 priority scenarios in one terminal
-python demo.py --chat
-python -m AQM_Database.chat.cli --auto
-
-# AQM vs TLS 1.3 benchmark
-python demo.py --chat-bench
-python -m AQM_Database.chat.cli --benchmark
+uvicorn AQM_Database.aqm_server.api:app --host 0.0.0.0 --port 8000
 ```
+
+**Start Flask instances (one per terminal):**
+
+```bash
+# Terminal 2
+python -m AQM_Database.flask_app.app --user alice --port 5000 \
+  --contacts bob --contact-ports 5001 --password mypassword
+
+# Terminal 3
+python -m AQM_Database.flask_app.app --user bob --port 5001 \
+  --contacts alice --contact-ports 5000 --password mypassword
+```
+
+Open `http://localhost:5000` and `http://localhost:5001` in your browser.
+
+Default password (if `--password` is not set): `aqm-demo-2026`. Can also be set via `AQM_PASSWORD` env var.
+
+### Running the Headless Demo (no UI)
+
+```bash
+python -m AQM_Database.prototype    # 4-phase lifecycle demo (mint → fetch → send → burn)
+```
+
+---
+
+## Demo UI Features
+
+| Feature | Description |
+|---------|-------------|
+| Login gate | Password-protected per-user instances |
+| Real-time SSE | Messages appear instantly without polling |
+| Direct / Groups tabs | Toggle between 1-to-1 and group conversations |
+| Group creation modal | Select contacts from a checklist, name the group |
+| Group member list | Panel in vault sidebar (bottom right, visible in group mode) |
+| Instant group visibility | All members see a new group immediately on creation |
+| PQ indicator dot | Green = GOLD/PQ, Yellow = SILVER/Hybrid, Red = BRONZE/Classical |
+| Session Tier | Shows the tier currently securing the active ratchet session |
+| Next Rekey Tier | Shows what tier the next coin would use based on device context (updates every 20s) |
+| Ratchet progress bar | Messages remaining before the next rekey |
+| Background minting | Auto-mints new coins when device is ideal and vault is low (120s cooldown) |
+| Vault burn counter | Tracks private keys destroyed (perfect forward secrecy) |
+| Priority promotion bars | Live progress toward MATE and BESTIE thresholds |
+| Per-contact coin inventory | GOLD/SILVER/BRONZE counts on each contact card |
+
+---
+
+## Context-Based Tier Selection
+
+The device context simulator updates every 20 seconds with random values:
+
+| Condition | Tier Selected |
+|-----------|---------------|
+| battery < 5% | BRONZE (critical battery — conserve) |
+| no WiFi + signal < -100 dBm | BRONZE (poor signal — small keys) |
+| WiFi + battery < 20% | BRONZE (low battery — conserve) |
+| no WiFi + signal >= -100 dBm | SILVER (decent cellular) |
+| WiFi + 20% <= battery < 50% | SILVER (moderate conditions) |
+| WiFi + battery >= 50% | GOLD (ideal conditions) |
+
+The selected tier is further capped by the contact's priority level:
+
+| Priority | Ceiling | GOLD cap | SILVER cap | BRONZE cap |
+|----------|---------|----------|------------|------------|
+| STRANGER | BRONZE | 0 | 0 | 5 |
+| MATE | SILVER | 0 | 6 | 4 |
+| BESTIE | GOLD | 5 | 4 | 1 |
+
+Contacts are auto-promoted based on messaging frequency:
+- **STRANGER → MATE**: 4 messages within 30 days
+- **MATE → BESTIE**: 5 messages within 7 days
+
+---
 
 ## Running Tests
 
 ```bash
-# All tests (needs Docker for server + chat tests)
+# All tests (302 total — needs Docker for server tests)
 pytest AQM_Database/ -v
 
-# By package
-pytest AQM_Database/aqm_shared/tests/ -v   # 32 tests — crypto + context (no Docker)
-pytest AQM_Database/aqm_db/tests/ -v       # 70 tests — vault, inventory, gc, concurrency (no Docker, uses fakeredis)
-pytest AQM_Database/aqm_server/tests/ -v   # 37 tests — upload, fetch, purge, bridge, api (needs Docker)
-pytest AQM_Database/chat/tests/ -v         # 34 tests — protocol, session, benchmark (protocol: no Docker; session+benchmark: needs Docker)
+# By subsystem (no Docker required)
+pytest AQM_Database/aqm_shared/tests/ -v    # 48 tests — crypto + context
+pytest AQM_Database/aqm_db/tests/ -v        # 70 tests — vault + inventory (fakeredis)
+pytest AQM_Database/aqm_contacts/tests/ -v  # 33 tests — contacts (SQLite)
+pytest AQM_Database/aqm_session/tests/ -v   # 44 tests — ratchet + session
+pytest AQM_Database/aqm_network/tests/ -v   # 26 tests — network protocol
+pytest AQM_Database/aqm_app/tests/ -v       # 30 tests — orchestrator
+pytest AQM_Database/aqm_group/tests/ -v     # 70 tests — group chat (key_tree, hot_edge, parcel, orchestrator)
 
-# Single test
-pytest AQM_Database/aqm_db/tests/test_vault.py::test_store_key_success -v
+# Requires Docker (Redis + PostgreSQL)
+pytest AQM_Database/aqm_server/tests/ -v    # 37 tests — coin server + bridge
 ```
 
-Test total: **173 tests** (32 shared + 70 Redis + 37 server + 34 chat).
+### Group Test Breakdown
 
-## Package Layout
+| Module | Tests |
+|--------|-------|
+| `test_key_tree.py` | 20 — B-Tree build/decrypt, tier partitioning |
+| `test_hot_edge.py` | 17 — edge activation, TTL expiry, key burn |
+| `test_group_parcel.py` | 14 — wire format build/parse round-trip |
+| `test_group_orchestrator.py` | 19 — send/receive flow, auto-create on receive |
 
-```
-AQM_Database/
-├── aqm_shared/                    # Shared types, errors, config (used by all)
-│   ├── config.py                  # Redis/Vault/Inventory constants, budget caps, enums
-│   ├── types.py                   # 11 dataclasses (VaultEntry, InventoryEntry, CoinUpload, …)
-│   ├── errors.py                  # Exception hierarchy (AQMDatabaseError base, 10+ subclasses)
-│   ├── crypto_engine.py           # CryptoEngine, MintedCoinBundle, mint_coin()
-│   ├── context_manager.py         # DeviceContext, ContextManager, SCENARIO_A/B/C
-│   └── tests/
-│       ├── test_crypto_engine.py  # 15 tests — key sizes, signing (Dilithium/Ed25519), mint_coin
-│       └── test_context_manager.py # 17 tests — decision paths, boundaries, scenarios
-│
-├── aqm_db/                        # Redis client layer
-│   ├── connection.py              # create_vault_client(), create_inventory_client(), health_check()
-│   ├── vault.py                   # SecureVault — store/burn/fetch/purge private keys
-│   ├── inventory.py               # SmartInventory — register contacts, store/select/consume public keys
-│   ├── garbage_collector.py       # GarbageCollector — purge inactive contacts
-│   ├── stats.py                   # StorageReporter — storage usage, vault report, dashboard
-│   └── tests/
-│       ├── conftest.py            # fakeredis fixtures (no Docker needed)
-│       ├── test_vault.py          # 28 tests
-│       ├── test_inventory.py      # 32 tests
-│       ├── test_gc.py             # 7 tests (on fakeredis, no Docker needed)
-│       └── test_concurrency.py    # 4 tests (threaded, on fakeredis)
-│
-├── aqm_server/                    # PostgreSQL server layer
-│   ├── config.py                  # PG_DSN, pool sizes, maintenance settings
-│   ├── db.py                      # create_pool(), get_pool(), close_pool(), health_check()
-│   ├── coin_inventory.py          # CoinInventoryServer — upload, fetch, purge, hard_delete
-│   ├── api.py                     # FastAPI endpoints (upload, fetch, count, purge, hard-delete)
-│   ├── migrations/
-│   │   ├── create_coin_inventory.sql
-│   │   └── rollback/rollback.sql
-│   └── tests/
-│       ├── conftest.py            # async fixtures with real PostgreSQL
-│       ├── test_upload.py         # 6 tests
-│       ├── test_fetch.py          # 9 tests (incl. concurrent fetch)
-│       ├── test_purge.py          # 6 tests
-│       ├── test_api.py            # 9 FastAPI endpoint tests
-│       └── test_bridge.py         # 7 integration tests (Redis ↔ PostgreSQL)
-│
-├── chat/                          # Terminal-to-terminal real-time chat
-│   ├── protocol.py                # ChatMessage, encrypt_message/decrypt_message (NaCl AEAD), JSON serialization
-│   ├── transport.py               # Redis pub/sub wrapper (publish/subscribe with threaded listener)
-│   ├── session.py                 # ChatSession — full AQM lifecycle per user + run_auto_demo()
-│   ├── benchmark.py               # AQM per-tier timing + TLS 1.3 handshake comparison
-│   ├── cli.py                     # argparse entry point (--user/--partner/--priority/--auto/--benchmark/--demo-pair)
-│   └── tests/
-│       ├── conftest.py            # fakeredis + asyncpg fixtures for chat tests
-│       ├── test_protocol.py       # 12 tests — serialization, AEAD encrypt/decrypt roundtrip
-│       ├── test_session.py        # 14 tests — lifecycle, priorities, exhaustion, burn, coin_status
-│       └── test_benchmark.py      # 8 tests — stats, table formatting, TLS handshake, AQM tier, per-message
-│
-├── bridge.py                      # fetch_and_cache(), upload_coins(), sync_inventory()
-├── prototype.py                   # 4-phase lifecycle demo with ANSI terminal output
-├── conftest.py                    # Session-scoped event_loop fixture (shared by all async tests)
-├── docker-compose.yml             # Redis 7 + PostgreSQL 16
-└── enviroment.yml                 # Conda environment spec
+---
 
-demo.py                            # Top-level demo runner with preflight checks
-codes/                             # C++ crypto backend reference (liboqs, libsodium)
-├── CMakeLists.txt                 # Build config (links liboqs, libsodium, httplib)
-├── include/
-│   ├── httplib.h                  # HTTP client/server (header-only)
-│   └── json.hpp                   # nlohmann JSON (header-only)
-└── src/
-    ├── crypto/
-    │   ├── crypto_engine.cpp      # Kyber-768 + X25519 keygen
-    │   └── crypto_engine.h
-    ├── common/common.h            # Shared types
-    ├── client_module/client_main.cpp
-    ├── server_module/server_main.cpp
-    └── logic_modules/
-        ├── contact_manager.h
-        ├── context_manager.h
-        └── inventory_manager.h
-```
+## Key Design Decisions
 
-## Architecture
+### Direct Messaging
 
-### Module dependency graph
+**Why amortize KEM operations?** ML-KEM-768 key generation and encapsulation are computationally expensive compared to classical ECDH. The ratchet amortizes this cost to approximately one KEM per 250 messages for GOLD tier.
 
-```
-aqm_shared/
-    config.py ← types.py ← errors.py ← crypto_engine.py
-                                       ← context_manager.py
+**Why burn private keys?** Each private key is used exactly once and then deleted. This provides perfect forward secrecy — even if an attacker later compromises the device, past messages cannot be decrypted because the keys no longer exist.
 
-aqm_db/ (Redis)
-    connection.py → vault.py → stats.py
-                  → inventory.py → garbage_collector.py
+**Why three tiers?** Different device conditions (battery, network quality) warrant different security/efficiency tradeoffs. A device on WiFi with full battery can afford ML-KEM-768; a device with 3% battery in a tunnel should use X25519.
 
-aqm_server/ (PostgreSQL)
-    db.py → coin_inventory.py → api.py
+**Why priority-based caps?** GOLD coins (scarce, expensive to generate) are reserved for trusted contacts who you communicate with frequently.
 
-bridge.py → aqm_db/inventory + aqm_server/coin_inventory
+### Group Chat
 
-chat/
-    protocol.py → transport.py → session.py → cli.py
-    benchmark.py → cli.py
-    session.py → crypto_engine + context_manager + vault + inventory + server + bridge
+| ID | Decision | Rationale |
+|----|----------|-----------|
+| D1 | Tier assignment is sender-local | The sender partitions members into tiers based on their own local contacts database |
+| D2 | Sender is never a leaf in own parcel | The sender constructs the tree — they already know the root key |
+| D3 | HOT edge scope is per (group_id, member_id) | B-Tree is per-group; edges are independent per member |
+| D4 | HOT edge wraps existing SessionRatchet | Reuses the proven ephemeral AES-256 ratchet — no new crypto primitives |
+| D5 | Group creation is creator-only (Phase I) | No invite/join protocol yet — creator specifies all members at creation |
+| D6 | Member removal is out of scope (Phase I) | Requires branch key rotation — deferred to Phase II |
+| D7 | Offline delivery reuses per-user mailbox | Extended the existing mailbox with a nullable `group_id` column |
+| D8 | One coin consumed per COLD leaf member | Each leaf encrypts its branch_key share with a fresh KEM exchange |
+| D9 | STRANGER coins fetched on-demand | Unknown users trigger synchronous network fetch for BRONZE coins |
+| D10 | Group message history is client-only | The server is zero-knowledge — it routes encrypted parcels without storing them |
 
-prototype.py → crypto_engine + context_manager + vault + inventory + server + bridge
-```
+**Why a B-Tree instead of pairwise encryption?** Pairwise encryption costs O(N) KEM operations per message. The B-Tree groups members by tier (branch level), so the branch key only needs one KEM per leaf. Members sharing a branch share a single branch key encrypted once, reducing total KEM operations.
 
-### End-to-end data flow
+**Why Hot Edges?** After the first COLD exchange, subsequent messages to the same member within 10 minutes skip the KEM entirely and derive keys from a `SessionRatchet`. This makes rapid group conversation nearly free in coin cost while maintaining forward secrecy (chain key is burned on TTL expiry).
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                       AQM KEY LIFECYCLE                            │
-├────────────────────────────────────────────────────────────────────┤
-│                                                                    │
-│  1. MINT (Bob's device)                                            │
-│     CryptoEngine.generate_keypair(tier)                            │
-│       ├─ private key → AES-GCM encrypt → SecureVault (Redis db=0) │
-│       └─ public key  → sign (Dilithium/Ed25519)                   │
-│                        → CoinInventoryServer (PG)                  │
-│                                                                    │
-│  2. PRE-FETCH (Alice's device)                                     │
-│     Bridge.fetch_and_cache(bob_id, tier, count)                    │
-│       PG: SELECT ... FOR UPDATE SKIP LOCKED → mark fetched_by     │
-│       Redis db=1: SmartInventory.store_key() with budget check     │
-│       (WATCH/MULTI/EXEC optimistic locking)                        │
-│                                                                    │
-│  3. SEND (Alice → Bob)                                             │
-│     ContextManager.select_coin(DeviceContext) → tier               │
-│     SmartInventory.select_coin(bob, tier) → ZPOPMIN (FIFO)        │
-│     encrypt_message(plaintext, pk) → NaCl SecretBox AEAD           │
-│     ChatTransport.publish(channel:bob, ChatMessage)                │
-│                                                                    │
-│  4. RECEIVE (Bob's device)                                         │
-│     ChatTransport.subscribe(channel:bob) → ChatMessage             │
-│     decrypt_message(ciphertext, pk) → plaintext + verify MAC       │
-│     SecureVault.fetch_key(key_id) → private key                    │
-│                                                                    │
-│  5. BURN (Bob's device)                                            │
-│     SecureVault.burn_key(key_id) → status=BURNED + HINCRBY stats   │
-│     fetch_key() now returns None — key permanently destroyed       │
-│                                                                    │
-├────────────────────────────────────────────────────────────────────┤
-│  INVARIANTS                                                        │
-│  • Each coin is used exactly once then destroyed                   │
-│  • Server coins claimed atomically (FOR UPDATE SKIP LOCKED)        │
-│  • Inventory enforces per-contact/per-tier budget caps             │
-│  • PQ: GOLD=full, SILVER=partial, BRONZE=classical                 │
-└────────────────────────────────────────────────────────────────────┘
-```
+**Why zero-knowledge server?** The relay server fans out opaque parcels. It never sees plaintext, root keys, or branch keys. Group membership is known only to participants (the server sees recipient IDs for routing, but not message content or group structure).
 
-### Key design patterns
+---
 
-- **Dependency injection**: `SecureVault` and `SmartInventory` receive a `redis.Redis` client via constructor. Tests pass `fakeredis.FakeRedis()`.
-- **Binary mode**: Redis clients use `decode_responses=False` — blobs stored as raw bytes. String fields decoded manually in `_deserialize_entry()`.
-- **Atomic writes**: All multi-step mutations use `pipeline(transaction=True)` (MULTI/EXEC). Inventory `store_key` uses WATCH/MULTI/EXEC optimistic locking for budget enforcement.
-- **Stats tracking**: Vault maintains a `vault:v1:stats` hash with atomic HINCRBY counters (active_gold/silver/bronze, total_burned, total_expired).
-- **Sorted set indexes**: Inventory uses sorted sets scored by `fetched_at` for FIFO coin selection via ZPOPMIN.
-- **Delete-on-Fetch**: Server uses `FOR UPDATE SKIP LOCKED` to atomically claim coins — fetched coins are marked, not visible to other requesters.
-- **Crypto backend fallback**: CryptoEngine tries liboqs+pynacl → pynacl-only → urandom-mock. All backends produce correct-sized keys and signatures.
-- **Real AEAD encryption**: `encrypt_message`/`decrypt_message` use NaCl SecretBox (XSalsa20-Poly1305) with key derived from SHA-256(public_key). Falls back to SHA-256 tag if pynacl is unavailable.
-- **Constant minting**: All users mint the same set of coins (5G+6S+5B) regardless of priority. Budget caps control how many are cached, and the context manager selects which tier to use at send time. Exception: STRANGER contacts use a handshake flow (mint 1 BRONZE only).
-- **Tier ceilings**: Per-priority cap applied after context decision tree: BESTIE=GOLD, MATE=SILVER, STRANGER=BRONZE. Prevents lower-priority contacts from using higher-tier coins even if device context allows it.
-- **Absolute imports**: All modules use `from AQM_Database.aqm_shared import config, errors`.
-- **pytest-asyncio strict mode**: All async tests need `pytestmark = pytest.mark.asyncio`. Single `event_loop` fixture in `AQM_Database/conftest.py`.
-- **Separate pub/sub connections**: Chat transport uses `decode_responses=True` (JSON strings), independent from vault/inventory binary clients.
-- **User-specific cleanup**: Chat sessions use targeted DELETE (per user_id) instead of flushdb, so both users coexist on the same Redis/PostgreSQL.
+## Dependencies
 
-### Redis key namespaces
+| Package | Purpose |
+|---------|---------|
+| `liboqs-python` | ML-KEM-768 + ML-DSA-65 (post-quantum) |
+| `PyNaCl` | X25519 + Ed25519 + AEAD (libsodium) |
+| `cryptography` | HKDF key derivation |
+| `flask` | Web UI server |
+| `fastapi` + `uvicorn` | Coin inventory REST API |
+| `asyncpg` | Async PostgreSQL driver |
+| `redis-py` | Vault + inventory (Redis) |
+| `pydantic` | Request/response validation |
 
-| Pattern | Type | Purpose |
-|---------|------|---------|
-| `vault:v1:key:{key_id}` | Hash | Single private key entry |
-| `vault:v1:stats` | Hash | Aggregate vault counters |
-| `inv:v1:key:{contact_id}:{key_id}` | Hash | Single cached public key |
-| `inv:v1:idx:{contact_id}:{GOLD\|SILVER\|BRONZE}` | Sorted Set | Coin selection index |
-| `inv:v1:meta:{contact_id}` | Hash | Contact priority/metadata |
-| `aqm:chat:{user_id}` | Pub/Sub channel | Real-time message delivery |
+See `AQM_Database/requirements.txt` for full version-pinned list.
 
-### PostgreSQL schema
+---
 
-```sql
-coin_inventory (
-    record_id      BIGSERIAL PRIMARY KEY,
-    user_id        UUID NOT NULL,
-    key_id         TEXT NOT NULL,
-    coin_category  TEXT NOT NULL,
-    public_key_blob BYTEA NOT NULL,
-    signature_blob  BYTEA NOT NULL,
-    uploaded_at    TIMESTAMPTZ DEFAULT NOW(),
-    fetched_by     UUID,
-    fetched_at     TIMESTAMPTZ,
-    UNIQUE (user_id, key_id)
-)
-```
+## Troubleshooting
 
-### Coin tiers
+**Inventory shows 0 coins after start:** Partner Flask instance must be started first so their coins are on the server. Background sync retries every 10 seconds automatically.
 
-| Tier | Algorithms | Public Key | Signature | Total |
-|------|-----------|-----------|----------|-------|
-| GOLD | Kyber-768 + Dilithium-3 | 1,184 B | 2,420 B | ~3.6 KB |
-| SILVER | Kyber-768 + Ed25519 | 1,184 B | 64 B | ~1.2 KB |
-| BRONZE | X25519 + Ed25519 | 32 B | 64 B | ~96 B |
+**`liboqs` version mismatch warning:** Cosmetic only. To fix: `pip install liboqs-python==0.15.0`.
 
-### Constant mint plan
+**DB password authentication failed after redeploying:** The PostgreSQL volume has the old password baked in. Run `docker volume rm aqm_databse_pg_data` then restart.
 
-Every user mints the same set of coins regardless of priority:
+**Coin exhaustion 500 errors during rapid group sends:** This is expected when sending many messages quickly — each COLD leaf burns a coin. The background minter auto-replenishes; messages will succeed again within ~120 seconds.
 
-| Tier | Count |
-|------|-------|
-| GOLD | 5 |
-| SILVER | 6 |
-| BRONZE | 5 |
-| **Total** | **16** |
+**Group not visible to non-creators:** Ensure the creator's instance can reach all member instances via HTTP. The `/group/api/notify_create` fan-out must succeed for instant group visibility.
 
-Budget caps control how many of each tier are *cached* (fetched from server to local inventory) per contact priority. The context manager selects which tier to *use* at send time based on device state.
+---
 
-### Budget caps (per contact)
+## Phase II Roadmap
 
-| Priority | Gold | Silver | Bronze |
-|----------|------|--------|--------|
-| BESTIE | 5 | 4 | 1 |
-| MATE | 0 | 6 | 4 |
-| STRANGER | 0 | 0 | 5 |
-
-### Context Manager — coin tier selection
-
-```
-battery < 5%                    → BRONZE
-no WiFi + signal < -100 dBm    → BRONZE
-WiFi + battery < 20%           → BRONZE
-no WiFi + signal >= -100 dBm   → SILVER
-WiFi + 20% <= battery < 50%    → SILVER
-WiFi + battery >= 50%          → GOLD
-```
-
-### Tier ceilings (per priority)
-
-After the decision tree selects a tier, a per-priority ceiling caps it:
-
-| Priority | Ceiling | Effect |
-|----------|---------|--------|
-| BESTIE | GOLD | Full range — context tree result used as-is |
-| MATE | SILVER | GOLD is capped to SILVER; SILVER/BRONZE pass through |
-| STRANGER | BRONZE | Everything capped to BRONZE regardless of context |
-
-### Random context
-
-In the interactive chat demo, device context (battery, WiFi, signal) **fluctuates randomly** between messages — simulating real-world conditions while texting. The context manager decision tree + tier ceiling determine the coin tier per message:
-
-- **BESTIE**: coin tier shifts GOLD → SILVER → BRONZE (and back up) as context changes
-- **MATE**: shifts SILVER → BRONZE (and back up); can't exceed SILVER ceiling
-- **STRANGER**: always BRONZE regardless of context
-
-## Prototype Demo — 4-phase lifecycle
-
-The prototype (`python demo.py`) demonstrates the full AQM key lifecycle:
-
-1. **MINT** — Generate 16 coins (5G+6S+5B) via CryptoEngine → private keys to Vault, public keys to PostgreSQL server
-2. **PRE-FETCH** — Register Bob as BESTIE → fetch public keys from server to local Inventory (budget-capped) → server coins marked as fetched (Delete-on-Fetch)
-3. **SEND** — Three device scenarios (A=home WiFi→GOLD, B=outdoor cellular→SILVER, C=underground→BRONZE) → ContextManager selects tier → consume coins from Inventory
-4. **DECRYPT+BURN** — Retrieve private key from Vault → burn after use → verify `fetch_key()` returns None
-
-## Chat Demo — real-time two-terminal messaging
-
-The chat demo (`python demo.py --demo-pair` or `python -m AQM_Database.chat.cli --demo-pair`) demonstrates the full AQM lifecycle between two users in real time:
-
-### Chat message lifecycle
-
-1. **ContextManager** inspects device state → selects coin tier
-2. **SmartInventory.select_coin()** pops oldest coin (FIFO), with fallback to lower tiers
-3. **encrypt_message()** derives symmetric key via SHA-256(pk) → NaCl SecretBox AEAD (XSalsa20-Poly1305)
-4. **ChatTransport.publish()** sends JSON envelope via Redis pub/sub
-5. Receiver's subscriber callback: deserialize → **decrypt_message()** + verify MAC → **vault.fetch_key()** → **vault.burn_key()** → display with verification + burn status
-
-### Interactive features
-
-- **Real-time display**: incoming messages appear instantly via threaded pub/sub listener
-- **Live coin counter**: prompt shows `[G:5 S:4 B:1]` remaining coins
-- **Random context**: device state (battery, WiFi, signal) fluctuates randomly per message — coin tier shifts dynamically
-- **Tier ceiling**: per-priority cap applied after context decision tree (BESTIE=GOLD, MATE=SILVER, STRANGER=BRONZE)
-- **Lifecycle detail**: each message shows key ID, device context, encrypt→publish / decrypt→verify→burn
-- **Tier fallback**: displays "wanted GOLD → fell back to SILVER" when tier is unavailable
-- **Ceiling cap**: displays "context wanted GOLD → capped to SILVER (ceiling)" when ceiling triggers
-- **`--demo-pair`**: auto-detects terminal emulator (tmux/gnome-terminal/konsole/xfce4-terminal/xterm) and spawns both windows
-- **`--priority`**: pass `BESTIE`, `MATE`, or `STRANGER` to `--demo-pair` to demo each scenario
-
-### Priority coverage
-
-| Priority | Tier Ceiling | What happens |
-|----------|-------------|-------------|
-| BESTIE | GOLD | Full range: random context yields GOLD/SILVER/BRONZE dynamically |
-| MATE | SILVER | Capped at SILVER: context may want GOLD but ceiling limits to SILVER; shifts SILVER↔BRONZE |
-| STRANGER | BRONZE | Always BRONZE: initial handshake (mint 1 BRONZE, share public key), no prefetch |
-
-### STRANGER handshake
-
-STRANGER contacts can't prefetch each other's public keys (first-time texting). Instead of the normal provision+fetch flow:
-
-1. Each side mints **1 BRONZE coin** and uploads the public key to the server
-2. Each side polls for the partner's BRONZE coin and fetches it
-3. Chat begins with 1 BRONZE coin per direction
-4. Tier ceiling ensures all messages use BRONZE regardless of device context
-
-### Benchmark methodology
-
-The benchmark (`python demo.py --chat-bench`) measures three scenarios:
-
-**AQM Full Lifecycle** (per tier, 50 iterations):
-```
-mint_coin → vault.store_key → upload_coins → fetch_and_cache →
-select_coin → encrypt_message → decrypt_message → burn_key
-```
-Includes one-time minting cost (~2-3ms for crypto keygen). Analogous to a first-contact scenario.
-Expected latency ordering: GOLD > SILVER > BRONZE (driven by coin data sizes: 3.6 KB → 1.2 KB → 96 B).
-
-**AQM Per-Message** (pre-minted coins, 50 iterations):
-```
-select_coin → encrypt_message → decrypt_message → burn_key
-```
-Coins are pre-minted and cached before timing starts. Reflects steady-state messaging latency.
-Per-message consistently beats TLS 1.3 (~0.1-0.3ms vs ~1.7ms) while providing post-quantum resistance (GOLD/SILVER) and perfect forward secrecy (all tiers: single-use keys).
-
-**TLS 1.3** (loopback, 50 iterations):
-Ephemeral ECDSA P-256 self-signed cert, measures `ssl.wrap_socket()` handshake time.
-
-Outputs ANSI comparison table with full lifecycle, per-message, byte sizes, and PQ-resistance.
-
-## Docker Setup
-
-```yaml
-# AQM_Database/docker-compose.yml
-services:
-  redis:     redis:7-alpine    → localhost:6379
-  postgres:  postgres:16-alpine → localhost:5433
-             POSTGRES_DB=aqm, POSTGRES_USER=aqm_user, POSTGRES_PASSWORD=aqm_dev_password
-             migrations auto-run via /docker-entrypoint-initdb.d mount
-```
-
-## Guides Reference
-
-The `AQM_Database/guides/` directory contains authoritative specs:
-- `AQM_Client_DB_Guide.md` — complete API signatures, Redis schemas, transaction patterns
-- `AQM_Client_DB_File_Breakdown.md` — exact function specs per file, expected test counts
-- `AQM_Database_Implementation_Guide.md` — full system design including server DB
-- `AQM_Database_Roadmap.md` — sprint plan and implementation order
-- `AQM_Server_PostgreSQL_Guide.md` — server database design
-- `AQM_Server_Roadmap.md` — server implementation roadmap
-- `AQM_Chat_Demo_Guide.md` — chat demo usage, interactive features, troubleshooting
-
-## Known Issues
-
-- `redis-py 7.x` WATCH/UNWATCH deprecation warnings — cosmetic only, call from Pipeline object to suppress
-- `liboqs-python` not in conda environment — Kyber-768 keygen uses real X25519 + random padding (correct sizes, not cryptographically real PQC); Dilithium-3 signatures use Ed25519 core + random padding (correct 2420 B size)
+- **Member removal + branch key rotation**: removing a member requires regenerating all branch keys for branches they had access to and re-encrypting for remaining members
+- **Batched STRANGER fetch**: pipeline on-demand BRONZE coin fetches instead of sequential per-member lookups
+- **Group admin management**: invite links, role changes, multi-admin support
+- **Bidirectional HOT edge activation**: receiver mirrors the HOT state from the shared secret in the received parcel (currently only sender activates)

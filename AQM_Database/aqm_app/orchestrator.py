@@ -181,9 +181,9 @@ class AQMApp:
                 kem_ciphertext = ct
 
                 if ratchet is None:
-                    ratchet = SessionRatchet(contact_id, coin.coin_category, shared_secret)
+                    ratchet = SessionRatchet(contact_id, coin.coin_category, shared_secret, is_initiator=True)
                 else:
-                    ratchet.rekey(shared_secret, coin.coin_category)
+                    ratchet.rekey(shared_secret, coin.coin_category, is_initiator=True)
 
                 coin_id = coin.key_id
                 coin_tier = coin.coin_category
@@ -191,8 +191,8 @@ class AQMApp:
                 # Consume the used coin
                 self.inventory.consume_key(contact_id, coin.key_id)
 
-            # 4. Derive message key
-            message_key = ratchet.derive_message_key()
+            # 4. Derive send key (only increments sender's counter)
+            message_key = ratchet.derive_send_key()
 
             # 5. Encrypt
             aad = f"{self.user_id}:{contact_id}".encode()
@@ -220,7 +220,7 @@ class AQMApp:
             await self.network.send_parcel(contact_id, framed.encode())
 
             # 8. Record
-            self.contacts.record_message(contact_id)
+            self.contacts.record_message(contact_id, direction="SENT")
             self._save_ratchet(ratchet)
 
             logger.info("Sent message to %s (tier=%s, rekey=%s)", contact_id, tier, coin_id is not None)
@@ -275,9 +275,9 @@ class AQMApp:
                 shared_secret = self.crypto.kem_decapsulate(kem_ct, entry.encrypted_blob)
 
                 if ratchet is None:
-                    ratchet = SessionRatchet(sender_id, coin_tier, shared_secret)
+                    ratchet = SessionRatchet(sender_id, coin_tier, shared_secret, is_initiator=False)
                 else:
-                    ratchet.rekey(shared_secret, coin_tier)
+                    ratchet.rekey(shared_secret, coin_tier, is_initiator=False)
 
                 # Burn the one-time private key
                 self.vault.burn_key(coin_id)
@@ -286,15 +286,15 @@ class AQMApp:
                 logger.error("No session with %s and no KEM data in parcel", sender_id)
                 return None
 
-            # Derive message key
-            message_key = ratchet.derive_message_key()
+            # Derive receive key (only increments receiver's counter)
+            message_key = ratchet.derive_recv_key()
 
             # Decrypt
             plaintext_bytes = self.crypto.decrypt_aead(encrypted_payload, message_key, aad)
             plaintext = plaintext_bytes.decode()
 
             # Record + save
-            self.contacts.record_message(sender_id)
+            self.contacts.record_message(sender_id, direction="RECEIVED")
             self._save_ratchet(ratchet)
 
             logger.info("Received message from %s", sender_id)

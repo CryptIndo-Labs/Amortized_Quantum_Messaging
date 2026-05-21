@@ -1,0 +1,95 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aqm
+      POSTGRES_USER: aqm_user
+      POSTGRES_PASSWORD: "${AQM_DB_PASSWORD:-aqm_prod_password}"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./AQM_Database/aqm_server/migrations:/docker-entrypoint-initdb.d
+
+  coin-server:
+    build: .
+    restart: unless-stopped
+    command: >
+      uvicorn AQM_Database.aqm_server.api:app
+      --host 0.0.0.0 --port 8000
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+
+  biprarshi:
+    build: .
+    restart: unless-stopped
+    command: >
+      python -m AQM_Database.flask_app.app
+      --user biprarshi --port 5000 --host 0.0.0.0
+      --contacts shirsa protyasha --contact-ports 5001 5002
+    depends_on:
+      - coin-server
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+      AQM_CONTACT_HOST_TEMPLATE: docker
+      AQM_PASSWORD: "${AQM_BIPRARSHI_PASSWORD:-biprarshi}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_BIPRARSHI:-change-me-biprarshi}"
+
+  shirsa:
+    build: .
+    restart: unless-stopped
+    command: >
+      python -m AQM_Database.flask_app.app
+      --user shirsa --port 5001 --host 0.0.0.0
+      --contacts biprarshi protyasha --contact-ports 5000 5002
+    depends_on:
+      - coin-server
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+      AQM_CONTACT_HOST_TEMPLATE: docker
+      AQM_PASSWORD: "${AQM_SHIRSA_PASSWORD:-shirsa}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_SHIRSA:-change-me-shirsa}"
+
+  protyasha:
+    build: .
+    restart: unless-stopped
+    command: >
+      python -m AQM_Database.flask_app.app
+      --user protyasha --port 5002 --host 0.0.0.0
+      --contacts biprarshi shirsa --contact-ports 5000 5001
+    depends_on:
+      - coin-server
+    environment:
+      REDIS_HOST: redis
+      PG_DSN: "postgresql://aqm_user:${AQM_DB_PASSWORD:-aqm_prod_password}@postgres:5432/aqm"
+      AQM_CONTACT_HOST_TEMPLATE: docker
+      AQM_PASSWORD: "${AQM_PROTYASHA_PASSWORD:-protyasha}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_PROTYASHA:-change-me-protyasha}"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  redis_data:
+  pg_data:
+  caddy_data:
+  caddy_config:

@@ -1,7 +1,8 @@
 # Redis Connection
+import os as _os
 
-REDIS_HOST              = "localhost"
-REDIS_PORT              = 6379
+REDIS_HOST              = _os.environ.get("REDIS_HOST", "localhost")
+REDIS_PORT              = int(_os.environ.get("REDIS_PORT", "6379"))
 REDIS_VAULT_DB          = 0          # Logical DB for Secure Vault
 REDIS_INVENTORY_DB      = 1          # Logical DB for Smart Inventory
 REDIS_SOCKET_TIMEOUT    = 5          # seconds

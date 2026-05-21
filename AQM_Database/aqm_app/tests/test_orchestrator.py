@@ -149,13 +149,13 @@ class TestSendMessage:
         mock_subs["crypto"].kem_encapsulate.assert_called_once()
         mock_subs["inventory"].consume_key.assert_called_once_with("bob", "coin-42")
         mock_subs["network"].send_parcel.assert_awaited_once()
-        mock_subs["contacts"].record_message.assert_called_once_with("bob")
+        mock_subs["contacts"].record_message.assert_called_once_with("bob", direction="SENT")
 
     async def test_send_existing_session_no_rekey(self, send_app, mock_subs):
         """When ratchet exists and doesn't need rekey, skip KEM."""
         ratchet = MagicMock()
         ratchet.needs_rekey.return_value = False
-        ratchet.derive_message_key.return_value = b"\x00" * 32
+        ratchet.derive_send_key.return_value = b"\x00" * 32
         ratchet.contact_id = "bob"
         send_app.active_sessions["bob"] = ratchet
 
@@ -234,12 +234,12 @@ class TestReceiveMessage:
         mock_subs["vault"].fetch_key.assert_called_once_with("coin-99")
         mock_subs["vault"].burn_key.assert_called_once_with("coin-99")
         mock_subs["crypto"].kem_decapsulate.assert_called_once()
-        mock_subs["contacts"].record_message.assert_called_once_with("bob")
+        mock_subs["contacts"].record_message.assert_called_once_with("bob", direction="RECEIVED")
         assert "bob" in app.active_sessions
 
     async def test_receive_existing_session_no_kem(self, app, mock_subs):
         ratchet = MagicMock()
-        ratchet.derive_message_key.return_value = b"\x00" * 32
+        ratchet.derive_recv_key.return_value = b"\x00" * 32
         ratchet.contact_id = "bob"
         app.active_sessions["bob"] = ratchet
 

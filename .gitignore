@@ -25,9 +25,12 @@ htmlcov/
 Thumbs.db
 
 # Environment
-*.env
+.env
 .env.local
 .env.*.local
+
+# Session databases (created at runtime)
+*_sessions.db
 
 # Claude Code
 .claude/

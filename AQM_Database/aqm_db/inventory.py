@@ -32,7 +32,7 @@ class SmartInventory:
         val = self.db.hget(self._meta_key(contact_id), "priority")
         if val is None:
             raise errors.ContactNotRegisteredError(contact_id)
-        return val.decode()
+        return val.decode() if isinstance(val, bytes) else val
 
     def _serialize_entry(self, contact_id: str, key_id: str, coin_category: str,
                          public_key: bytes, signature: bytes) -> dict:
